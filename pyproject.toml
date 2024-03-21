@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "sticker-telegram-bot"
+version = "0.1.0"
+description = ""
+authors = ["Andrew Jarvis <ajarvis7771@gmail.com>"]
+readme = "README.md"
+package-mode = false
+
+
+[tool.poetry.dependencies]
+python = "^3.10"
+python-telegram-bot = "^20.8"
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.2.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
