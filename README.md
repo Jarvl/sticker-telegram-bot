@@ -14,6 +14,7 @@ A powerful Telegram bot that allows users to easily add images to configured sti
 ## Requirements
 
 - Python 3.11+ (managed with pyenv)
+- [Poetry](https://python-poetry.org/) for dependency management
 - Telegram Bot Token (from [@BotFather](https://t.me/BotFather))
 - At least one sticker pack configured
 
@@ -41,12 +42,18 @@ A powerful Telegram bot that allows users to easily add images to configured sti
    eval "$(pyenv init -)"
    ```
 
+3. **Install Poetry** (if not already installed):
+   ```bash
+   curl -sSL https://install.python-poetry.org | python3 -
+   # Or see https://python-poetry.org/docs/#installation for details
+   ```
+
 ### Project Setup
 
 1. **Clone the repository:**
    ```bash
    git clone <repository-url>
-   cd telegram-sticker-bot
+   cd sticker-telegram-bot
    ```
 
 2. **Install the required Python version:**
@@ -55,25 +62,13 @@ A powerful Telegram bot that allows users to easily add images to configured sti
    pyenv local 3.11.4
    ```
 
-3. **Set up environment variables:**
+3. **Install dependencies with Poetry:**
    ```bash
-   cp .env.example .env
-   ```
-   
-   Edit `.env` with your configuration:
-   ```env
-   TELEGRAM_BOT_TOKEN=your_bot_token_here
-   TELEGRAM_BOT_USERNAME=your_bot_username
-   STICKER_PACKS=my_pack,funny_memes,work_stickers
-   API_HOST=0.0.0.0
-   API_PORT=8000
-   MODE=polling  # or 'webhook'
+   poetry install
    ```
 
-4. **Run the setup (automatically installs dependencies):**
-   ```bash
-   make setup
-   ```
+4. **Set up environment variables:**
+   - Copy and edit your `.env` file as needed (see below for required variables).
 
 ## Configuration
 
@@ -82,12 +77,17 @@ A powerful Telegram bot that allows users to easily add images to configured sti
 - `TELEGRAM_BOT_TOKEN`: Your bot token from [@BotFather](https://t.me/BotFather)
 - `TELEGRAM_BOT_USERNAME`: Your bot's username (without @)
 - `STICKER_PACKS`: Comma-separated list of sticker pack names
+- `STICKER_PACK_OWNER_USER_ID`: The Telegram user ID (integer) that owns the sticker packs
 
 ### Optional Environment Variables
 
 - `API_HOST`: Host for the API server (default: 0.0.0.0)
 - `API_PORT`: Port for the API server (default: 8000)
 - `WEBHOOK_URL`: Webhook URL for webhook mode
+- `MODE`: `polling` or `webhook` (default: polling)
+
+**Note:**
+- When using Kubernetes secrets or other orchestrators, ensure that environment variables are set as plain strings with no extra whitespace or newlines. If you encounter `ValueError: invalid literal for int() with base 10`, check your secret formatting and consider using `.strip()` in your config code.
 
 ## Usage
 
@@ -111,11 +111,13 @@ This will start the bot in the mode specified by `MODE` in your environment.
 
 ```bash
 make help          # Show all available commands
-make setup         # Initial setup (create venv, install deps, check config)
+make setup         # Initial setup (install deps, check config)
 make install       # Install dependencies
 make run           # Run bot (mode is set via MODE env variable)
 make clean         # Clean up Python cache and logs
 make check-config  # Validate configuration only
+make format        # Format code with black
+make lint          # Run flake8 linter
 ```
 
 ### Using the Bot
