@@ -42,6 +42,12 @@ class StickerBot:
         return chat_id in Config.ALLOWED_CHAT_IDS
 
     @staticmethod
+    def is_direct_message_allowed(chat_id: int) -> bool:
+        """Check if direct message (positive chat ID) is allowed."""
+        # Direct messages have positive chat IDs, group chats have negative
+        return StickerBot.is_chat_allowed(chat_id) and chat_id > 0
+
+    @staticmethod
     def make_sticker_set_name(title: str, username: str) -> str:
         cleaned_title = re.sub(r"\s+", "_", title)
         cleaned_title = re.sub(r"[^A-Za-z0-9_]", "", cleaned_title)
@@ -51,6 +57,65 @@ class StickerBot:
         )  # Remove leading non-letters
         cleaned_title = cleaned_title.rstrip("_")
         return f"{cleaned_title}_by_{username}"
+
+    async def _process_image_message(self, message, error_message_id=None):
+        """Shared method to process image messages and extract file ID."""
+        # Check if the message contains an image
+        if not (message.photo or message.document):
+            return (
+                None,
+                "❌ The message doesn't contain an image. Please provide an image.",
+            )
+
+        # Get the image file
+        if message.photo:
+            # Get the highest quality photo (last in the list)
+            photo = message.photo[-1]
+            file_id = photo.file_id
+        elif message.document:
+            # Check if document is an image
+            if (
+                not message.document.mime_type
+                or not message.document.mime_type.startswith("image/")
+            ):
+                return None, "❌ The file is not an image. Please provide an image."
+            file_id = message.document.file_id
+        else:
+            return None, "❌ No image found in the message."
+
+        return file_id, None
+
+    async def _setup_pending_sticker(
+        self, update: Update, file_id: Optional[str], image_message_id: int
+    ):
+        """Shared method to set up pending sticker and prompt for emoji."""
+        if update.message is None or file_id is None:
+            return False
+
+        # Get user ID and validate
+        user_id = update.message.from_user.id if update.message.from_user else None
+        if user_id is None:
+            await update.message.reply_text(
+                "❌ Could not determine user.",
+                reply_to_message_id=update.message.message_id,
+            )
+            return False
+
+        # Set up pending sticker
+        self.pending_stickers[user_id] = {
+            "message_id": image_message_id,
+            "file_id": file_id,
+            "chat_id": update.message.chat_id,
+            "user_message_id": update.message.message_id,
+            "waiting_for_emoji": True,
+        }
+
+        # Prompt for emoji
+        await update.message.reply_text(
+            "📸 Great! Now just reply to this message with a single emoji for this sticker, like 🗿, 🔫, or 💩.",
+            reply_to_message_id=update.message.message_id,
+        )
+        return True
 
     def start(self):
         """Initialize and start the bot."""
@@ -70,6 +135,11 @@ class StickerBot:
         )
         self.application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_emoji_response)
+        )
+        self.application.add_handler(
+            MessageHandler(
+                filters.PHOTO | filters.Document.IMAGE, self.handle_direct_image
+            )
         )
         self.application.add_handler(
             CallbackQueryHandler(
@@ -112,53 +182,17 @@ class StickerBot:
 
         replied_message = update.message.reply_to_message
 
-        # Check if the replied message contains an image
-        if not (replied_message.photo or replied_message.document):
+        # Process the image using shared method
+        file_id, error_message = await self._process_image_message(replied_message)
+        if error_message:
             await update.message.reply_text(
-                "❌ The message you replied to doesn't contain an image. Please reply to an image.",
+                error_message,
                 reply_to_message_id=update.message.message_id,
             )
             return
 
-        # Get the image file
-        if replied_message.photo:
-            # Get the highest quality photo (last in the list)
-            photo = replied_message.photo[-1]
-            file_id = photo.file_id
-        elif replied_message.document:
-            # Check if document is an image
-            if (
-                not replied_message.document.mime_type
-                or not replied_message.document.mime_type.startswith("image/")
-            ):
-                await update.message.reply_text(
-                    "❌ The file you replied to is not an image. Please reply to an image.",
-                    reply_to_message_id=update.message.message_id,
-                )
-                return
-            file_id = replied_message.document.file_id
-
-        # Store pending sticker information (waiting for emoji)
-        user_id = update.message.from_user.id if update.message.from_user else None
-        if user_id is None:
-            await update.message.reply_text(
-                "❌ Could not determine user.",
-                reply_to_message_id=update.message.message_id,
-            )
-            return
-
-        self.pending_stickers[user_id] = {
-            "message_id": replied_message.message_id,
-            "file_id": file_id,
-            "chat_id": update.message.chat_id,
-            "user_message_id": update.message.message_id,
-            "waiting_for_emoji": True,
-        }
-
-        await update.message.reply_text(
-            "📸 Great! Now just reply to this message with a single emoji for this sticker, like 🗿, 🔫, or 💩.",
-            reply_to_message_id=update.message.message_id,
-        )
+        # Set up pending sticker and prompt for emoji
+        await self._setup_pending_sticker(update, file_id, replied_message.message_id)
 
     async def handle_emoji_response(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -210,6 +244,24 @@ class StickerBot:
             reply_markup=reply_markup,
             reply_to_message_id=update.message.message_id,
         )
+
+    async def handle_direct_image(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Handle direct messages containing images from allowed users."""
+        if update.message is None or not self.is_direct_message_allowed(
+            update.message.chat_id
+        ):
+            return
+
+        # Process the image using shared method
+        file_id, error_message = await self._process_image_message(update.message)
+        if error_message:
+            # For direct messages, we silently ignore non-image messages
+            return
+
+        # Set up pending sticker and prompt for emoji
+        await self._setup_pending_sticker(update, file_id, update.message.message_id)
 
     async def handle_sticker_pack_selection(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
