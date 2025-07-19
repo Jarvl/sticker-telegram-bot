@@ -14,6 +14,7 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 from PIL import Image
 import io
+import emoji
 
 from sticker_telegram_bot.config import Config
 
@@ -27,11 +28,12 @@ logger = logging.getLogger(__name__)
 class StickerBot:
     """Telegram bot for managing sticker packs."""
 
+    PACK_PREFIX = "pack_"
+    CALLBACK_DATA_SEPARATOR = "|"
+
     def __init__(self):
         self.application: Optional[Application] = None
-        self.pending_stickers: Dict[int, Dict] = (
-            {}
-        )  # user_id -> {message_id, file_id, chat_id, waiting_for_emoji}
+        self.pending_stickers: Dict[int, Dict] = {}
 
     @staticmethod
     def is_chat_allowed(chat_id: int) -> bool:
@@ -70,7 +72,10 @@ class StickerBot:
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_emoji_response)
         )
         self.application.add_handler(
-            CallbackQueryHandler(self.handle_sticker_pack_selection, pattern=r"^pack_")
+            CallbackQueryHandler(
+                self.handle_sticker_pack_selection,
+                pattern=rf"^{re.escape(self.PACK_PREFIX)}",
+            )
         )
 
         logger.info("Bot started successfully")
@@ -86,7 +91,7 @@ class StickerBot:
             "1. Reply to an image with the command '/sticker'\n"
             "2. Send an emoji for the sticker\n"
             "3. Select which sticker pack to add it to\n"
-            "4. The image will be added to your chosen pack\n\n"
+            "4. The sticker will be added to your chosen pack\n\n"
         )
         await update.message.reply_text(welcome_message)
 
@@ -100,7 +105,8 @@ class StickerBot:
         # Check if this is a reply to another message
         if not update.message.reply_to_message:
             await update.message.reply_text(
-                "❌ Please reply to an image with the /sticker command."
+                "❌ Please reply to an image with the /sticker command.",
+                reply_to_message_id=update.message.message_id,
             )
             return
 
@@ -109,7 +115,8 @@ class StickerBot:
         # Check if the replied message contains an image
         if not (replied_message.photo or replied_message.document):
             await update.message.reply_text(
-                "❌ The message you replied to doesn't contain an image. Please reply to an image."
+                "❌ The message you replied to doesn't contain an image. Please reply to an image.",
+                reply_to_message_id=update.message.message_id,
             )
             return
 
@@ -125,7 +132,8 @@ class StickerBot:
                 or not replied_message.document.mime_type.startswith("image/")
             ):
                 await update.message.reply_text(
-                    "❌ The file you replied to is not an image. Please reply to an image."
+                    "❌ The file you replied to is not an image. Please reply to an image.",
+                    reply_to_message_id=update.message.message_id,
                 )
                 return
             file_id = replied_message.document.file_id
@@ -133,7 +141,10 @@ class StickerBot:
         # Store pending sticker information (waiting for emoji)
         user_id = update.message.from_user.id if update.message.from_user else None
         if user_id is None:
-            await update.message.reply_text("❌ Could not determine user.")
+            await update.message.reply_text(
+                "❌ Could not determine user.",
+                reply_to_message_id=update.message.message_id,
+            )
             return
 
         self.pending_stickers[user_id] = {
@@ -145,7 +156,8 @@ class StickerBot:
         }
 
         await update.message.reply_text(
-            "📸 Great! Now just reply to this message with a single emoji for this sticker, like 🗿, 🔫, or 💩."
+            "📸 Great! Now just reply to this message with a single emoji for this sticker, like 🗿, 🔫, or 💩.",
+            reply_to_message_id=update.message.message_id,
         )
 
     async def handle_emoji_response(
@@ -165,29 +177,38 @@ class StickerBot:
         ].get("waiting_for_emoji"):
             return
 
-        emoji = update.message.text.strip() if update.message.text else ""
+        emoji_text = update.message.text.strip() if update.message.text else ""
 
-        # Validate that it's a single emoji (basic check)
-        if len(emoji) > 2 or not emoji:
+        # Validate that it's a single emoji using proper emoji detection
+        if not emoji_text or not emoji.is_emoji(emoji_text):
             await update.message.reply_text(
-                "❌ Please send just a single emoji (like 😄, 🎉, or 🚀)"
+                "❌ Please send just a single emoji (like 🗿, 🔫, or 💩)",
+                reply_to_message_id=update.message.message_id,
             )
             return
 
         # Store the emoji and mark as ready for pack selection
-        self.pending_stickers[user_id]["emoji"] = emoji
+        self.pending_stickers[user_id]["emoji"] = emoji_text
         self.pending_stickers[user_id]["waiting_for_emoji"] = False
 
         # Create inline keyboard with sticker pack options
         keyboard = []
         for pack in Config.STICKER_PACKS:
-            keyboard.append([InlineKeyboardButton(pack, callback_data=f"pack_{pack}")])
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        pack,
+                        callback_data=f"{self.PACK_PREFIX}{pack}{self.CALLBACK_DATA_SEPARATOR}{user_id}",
+                    )
+                ]
+            )
 
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(
-            f"📦 Choose a sticker pack to add this image with emoji {emoji}:",
+            f"📦 Choose a sticker pack to add this image with emoji {emoji_text}:",
             reply_markup=reply_markup,
+            reply_to_message_id=update.message.message_id,
         )
 
     async def handle_sticker_pack_selection(
@@ -210,24 +231,35 @@ class StickerBot:
 
         user_id = query.from_user.id if query.from_user else None
         if user_id is None:
-            logger.error("No user found in callback query")
-            await query.edit_message_text(
-                "❌ No user found for this action. Please try again."
+            logger.error("No user found in callback query. This shouldn't happen")
+            return
+
+        if query.data is None:
+            logger.error("No data found in callback query. This shouldn't happen")
+            return
+
+        callback_data = tuple(
+            query.data.replace(self.PACK_PREFIX, "").split(self.CALLBACK_DATA_SEPARATOR)
+        )
+        if not all(callback_data):
+            logger.error(
+                "Incorrect data found in callback query. This shouldn't happen"
             )
+            return
+
+        selected_pack, callback_user_id = callback_data
+
+        # user_id is already an int
+        if int(callback_user_id) != user_id:
+            logger.info("Someone is being a naughty boy. This sometimes happens.")
             return
 
         # Check if user has a pending sticker
-        if user_id not in self.pending_stickers:
-            logger.warning(f"No pending sticker found for user {user_id}")
-            await query.edit_message_text(
-                "❌ No pending sticker found. Please try again."
+        pending_data = self.pending_stickers.get(user_id)
+        if pending_data is None:
+            logger.warning(
+                f"No pending sticker found for user {user_id}. This can happen if the user clicks the button multiple times before the sticker is added."
             )
-            return
-
-        pending_data = self.pending_stickers[user_id]
-        selected_pack = query.data.replace("pack_", "") if query.data else None
-        if not selected_pack:
-            await query.edit_message_text("❌ Invalid sticker pack selection.")
             return
 
         # Validate pack selection
@@ -265,8 +297,11 @@ class StickerBot:
             del self.pending_stickers[user_id]
 
             # Log the exact message being sent for debugging
-            success_message = f"✅ Image successfully added to sticker pack: {selected_pack}. Sticker pack can be accessed at: https://t.me/addstickers/{sticker_set_name}"
-            logger.info(f"Sending success message: {success_message}")
+            success_message = (
+                f"Thank you daddy 💕. Sticker added to "
+                f'<a href="https://t.me/addstickers/{sticker_set_name}">{selected_pack}</a>.\n\n'
+                "ℹ️ The sticker might not immediately appear in the pack. If it doesn't, try re-adding the pack and restarting the app a few times."
+            )
 
             try:
                 await query.edit_message_text(
@@ -282,7 +317,7 @@ class StickerBot:
         except Exception as e:
             logger.error(f"Error adding sticker to pack: {e}")
             await query.edit_message_text(
-                f"❌ Failed to add image to sticker pack: {str(e)}"
+                f"🗿 Hey that's a nice sticker suggestion, too bad I ain't reading it 🗿. I'm just playin here's the error: {str(e)}"
             )
 
     async def process_image_for_sticker(self, image_data: bytes) -> bytes:
@@ -351,7 +386,7 @@ class StickerBot:
 
         except Exception as e:
             logger.error(f"Error adding sticker to pack: {e}")
-            raise
+            raise e
 
     def run_polling(self):
         """Run the bot using polling."""
