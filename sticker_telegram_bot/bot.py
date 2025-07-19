@@ -112,7 +112,7 @@ class StickerBot:
 
         # Prompt for emoji
         await update.message.reply_text(
-            "📸 Great! Now just reply to this message with a single emoji for this sticker, like 🗿, 🔫, or 💩.",
+            "📸 Great! Now just reply to this message with a single emoji for this sticker, like 🗿, 🔫, or 💩.\n\n❌ Use '/cancel' to cancel this request.",
             reply_to_message_id=update.message.message_id,
         )
         return True
@@ -132,6 +132,9 @@ class StickerBot:
         self.application.add_handler(CommandHandler("help", self.start_command))
         self.application.add_handler(
             CommandHandler("sticker", self.handle_sticker_command)
+        )
+        self.application.add_handler(
+            CommandHandler("cancel", self.handle_cancel_command)
         )
         self.application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_emoji_response)
@@ -162,8 +165,35 @@ class StickerBot:
             "2. Send an emoji for the sticker\n"
             "3. Select which sticker pack to add it to\n"
             "4. The sticker will be added to your chosen pack\n\n"
+            "💡 You can also send an image directly to me (if you're in an allowed chat).\n"
+            "❌ Use '/cancel' to clear any pending sticker submissions."
         )
         await update.message.reply_text(welcome_message)
+
+    async def handle_cancel_command(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Handle /cancel command to clear pending stickers."""
+        if update.message is None or not self.is_chat_allowed(update.message.chat_id):
+            return
+
+        user_id = update.message.from_user.id if update.message.from_user else None
+        if user_id is None:
+            return
+
+        # Check if user has pending stickers
+        if user_id in self.pending_stickers:
+            # Clear the pending sticker
+            del self.pending_stickers[user_id]
+            await update.message.reply_text(
+                "❌ Cancelled! Your pending request has been cleared.",
+                reply_to_message_id=update.message.message_id,
+            )
+        else:
+            await update.message.reply_text(
+                "ℹ️ You don't have any pending requests to cancel.",
+                reply_to_message_id=update.message.message_id,
+            )
 
     async def handle_sticker_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -240,7 +270,7 @@ class StickerBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(
-            f"📦 Choose a sticker pack to add this image with emoji {emoji_text}:",
+            f"📦 Choose a sticker pack to add this image with emoji {emoji_text}:\n\n❌ Use '/cancel' to cancel this request.",
             reply_markup=reply_markup,
             reply_to_message_id=update.message.message_id,
         )
