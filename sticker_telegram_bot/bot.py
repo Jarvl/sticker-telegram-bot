@@ -134,19 +134,19 @@ class StickerBot:
 
         return file_id, duration, None
 
-    def _store_pending_sticker(
+    async def _store_pending_sticker(
         self,
         update: Update,
         file_id: str,
         media_message_id: int,
         media_type: str,
         duration: Optional[float] = None,
-    ) -> Optional[int]:
-        """Store pending sticker data. Returns user_id if successful, None otherwise."""
-        # Get user ID and validate
+    ) -> bool:
+        """Store pending sticker data. Returns True if successful, False otherwise."""
+        # Get and validate user ID
         user_id = self._get_user_id(update)
-        if user_id is None:
-            return None
+        if not await self._validate_user_id(update, user_id):
+            return False
 
         # Set up pending sticker
         self.pending_stickers[user_id] = {
@@ -161,7 +161,7 @@ class StickerBot:
         if duration is not None:
             self.pending_stickers[user_id]["duration"] = duration
 
-        return user_id
+        return True
 
     async def _setup_pending_image_sticker(
         self, update: Update, file_id: Optional[str], image_message_id: int
@@ -170,13 +170,10 @@ class StickerBot:
         if update.message is None or file_id is None:
             return False
 
-        # Store pending sticker
-        user_id = self._store_pending_sticker(
+        # Store pending sticker (validates user_id internally)
+        if not await self._store_pending_sticker(
             update, file_id, image_message_id, media_type="static"
-        )
-
-        # Validate user_id
-        if not await self._validate_user_id(update, user_id):
+        ):
             return False
 
         # Prompt for emoji
@@ -197,13 +194,10 @@ class StickerBot:
         if update.message is None or file_id is None:
             return False
 
-        # Store pending sticker
-        user_id = self._store_pending_sticker(
+        # Store pending sticker (validates user_id internally)
+        if not await self._store_pending_sticker(
             update, file_id, animation_message_id, media_type="video", duration=duration
-        )
-
-        # Validate user_id
-        if not await self._validate_user_id(update, user_id):
+        ):
             return False
 
         # Prompt for emoji
