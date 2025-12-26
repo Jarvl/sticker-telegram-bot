@@ -17,7 +17,7 @@ pillow = "^11.3.0"
 pydantic = "^2.11.7"
 python-dotenv = "^1.1.1"
 emoji = "^2.14.1"
-ffmpeg-python = "^0.2.0"
+moviepy = "^2.2.1"
 
 
 [tool.poetry.group.dev.dependencies]

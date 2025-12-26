@@ -122,17 +122,17 @@ make clean                  # Clean Python cache and logs
 - Output as PNG bytes
 
 **Animations** are processed in `process_video_for_sticker()`:
-- Uses ffmpeg-python library (requires ffmpeg system dependency)
+- Uses moviepy library (requires ffmpeg system dependency)
 - Writes input to temp file, outputs WEBM to temp file
 - Conversion specs:
-  - Codec: VP9 (libvpx-vp9)
-  - Resolution: 512px on longest side (maintains aspect ratio)
-  - FPS: 30 constant
-  - Audio: stripped (stickers can't have audio)
-  - Duration: if >3s, speeds up video using `setpts` filter
+  - Codec: VP9 (libvpx-vp9) via `write_videofile()`
+  - Resolution: 512px on longest side (maintains aspect ratio) using `resize()`
+  - FPS: 30 constant using `set_fps()`
+  - Audio: stripped with `audio=False`
+  - Duration: if >3s, speeds up video using `fx(vfx.speedx, multiplier)`
   - Quality: CRF 30 with constant quality mode
 - File size validation: rejects if >256KB
-- Cleans up temp files in finally block
+- Closes clip and cleans up temp files in finally block
 
 ### Sticker Pack Naming
 
@@ -171,7 +171,7 @@ Optional environment variables:
 - `pydantic` (v2.11): Used for config validation patterns
 - `emoji` (v2.14): Emoji validation
 - `python-dotenv` (v1.1): Environment variable loading
-- `ffmpeg-python` (v0.2): Python wrapper for ffmpeg (requires system ffmpeg)
+- `moviepy` (v2.2): Video editing library for animated stickers (requires system ffmpeg)
 
 ## Notes for Development
 

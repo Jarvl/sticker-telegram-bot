@@ -15,7 +15,8 @@ from telegram.constants import ParseMode
 from PIL import Image
 import io
 import emoji
-import ffmpeg
+from moviepy.editor import VideoFileClip
+import moviepy.video.fx.all as vfx
 import tempfile
 import os
 
@@ -579,6 +580,7 @@ class StickerBot:
         """Process video/animation to meet Telegram sticker requirements (WEBM VP9)."""
         temp_input = None
         temp_output = None
+        clip = None
 
         try:
             # Create temporary files
@@ -592,16 +594,19 @@ class StickerBot:
                 suffix=".webm", delete=False
             ).name
 
-            # Get video info to determine dimensions
-            probe = ffmpeg.probe(temp_input)
-            video_stream = next(
-                (s for s in probe["streams"] if s["codec_type"] == "video"), None
-            )
-            if not video_stream:
-                raise ValueError("No video stream found")
+            # Load video clip
+            clip = VideoFileClip(temp_input)
 
-            width = int(video_stream["width"])
-            height = int(video_stream["height"])
+            # Get dimensions
+            width, height = clip.size
+
+            # Speed up video if longer than 3 seconds
+            if duration > 3.0:
+                speed_multiplier = duration / 3.0
+                logger.info(
+                    f"Video duration {duration}s > 3s, speeding up by {speed_multiplier}x"
+                )
+                clip = clip.fx(vfx.speedx, speed_multiplier)
 
             # Calculate new dimensions (512px on longest side)
             if width > height:
@@ -615,39 +620,30 @@ class StickerBot:
             new_width = new_width if new_width % 2 == 0 else new_width - 1
             new_height = new_height if new_height % 2 == 0 else new_height - 1
 
-            # Build ffmpeg command
-            input_stream = ffmpeg.input(temp_input)
+            # Resize clip
+            clip = clip.resize((new_width, new_height))
 
-            # Speed up video if longer than 3 seconds
-            if duration > 3.0:
-                speed_multiplier = duration / 3.0
-                logger.info(
-                    f"Video duration {duration}s > 3s, speeding up by {speed_multiplier}x"
-                )
-                # Use setpts filter to speed up video
-                video = input_stream.video.filter("setpts", f"PTS/{speed_multiplier}")
-            else:
-                video = input_stream.video
+            # Set FPS
+            clip = clip.set_fps(30)
 
-            # Apply video filters
-            video = video.filter("scale", new_width, new_height).filter(
-                "fps", fps=30, round="up"
-            )
-
-            # Output with VP9 codec, no audio
-            output = ffmpeg.output(
-                video,
+            # Write to WEBM with VP9 codec
+            clip.write_videofile(
                 temp_output,
-                vcodec="libvpx-vp9",
-                crf=30,  # Quality (lower = better, 23-30 recommended)
-                b_v="0",  # Use constant quality mode
-                deadline="good",  # Encoding speed vs quality tradeoff
-                cpu_used=4,  # Faster encoding (0-5, higher = faster)
-                an=None,  # No audio
+                codec="libvpx-vp9",
+                audio=False,
+                ffmpeg_params=[
+                    "-crf",
+                    "30",  # Quality (lower = better, 23-30 recommended)
+                    "-b:v",
+                    "0",  # Use constant quality mode
+                    "-deadline",
+                    "good",  # Encoding speed vs quality tradeoff
+                    "-cpu-used",
+                    "4",  # Faster encoding (0-5, higher = faster)
+                ],
+                verbose=False,
+                logger=None,
             )
-
-            # Run ffmpeg
-            ffmpeg.run(output, overwrite_output=True, quiet=True)
 
             # Read the output file
             with open(temp_output, "rb") as f:
@@ -669,6 +665,9 @@ class StickerBot:
             logger.error(f"Error processing video: {e}")
             raise
         finally:
+            # Close clip
+            if clip is not None:
+                clip.close()
             # Clean up temporary files
             if temp_input and os.path.exists(temp_input):
                 os.unlink(temp_input)
