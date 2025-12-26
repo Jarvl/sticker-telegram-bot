@@ -35,9 +35,37 @@ class StickerBot:
     PACK_PREFIX = "pack_"
     CALLBACK_DATA_SEPARATOR = "|"
 
+    # Message templates
+    EMOJI_PROMPT_BASE = (
+        "Great! Now just reply to this message with a single emoji for this sticker, "
+        "like 🗿, 🔫, or 💩.\n\n❌ Use '/cancel' to cancel this request."
+    )
+
     def __init__(self):
         self.application: Optional[Application] = None
         self.pending_stickers: Dict[int, Dict] = {}
+
+    def _get_user_id(self, update: Update) -> Optional[int]:
+        """Extract and validate user_id from update. Returns None if invalid."""
+        if update.message is None or update.message.from_user is None:
+            return None
+        return update.message.from_user.id
+
+    async def _handle_invalid_user_id(
+        self, update: Update, user_id: Optional[int]
+    ) -> bool:
+        """
+        Check if user_id is invalid and send error message if so.
+        Returns True if user_id is invalid (caller should abort), False if valid.
+        """
+        if user_id is None:
+            if update.message:
+                await update.message.reply_text(
+                    "❌ Could not determine user.",
+                    reply_to_message_id=update.message.message_id,
+                )
+            return True
+        return False
 
     @staticmethod
     def is_chat_allowed(chat_id: int) -> bool:
@@ -115,11 +143,8 @@ class StickerBot:
         duration: Optional[float] = None,
     ) -> Optional[int]:
         """Store pending sticker data. Returns user_id if successful, None otherwise."""
-        if update.message is None:
-            return None
-
         # Get user ID and validate
-        user_id = update.message.from_user.id if update.message.from_user else None
+        user_id = self._get_user_id(update)
         if user_id is None:
             return None
 
@@ -150,16 +175,13 @@ class StickerBot:
             update, file_id, image_message_id, media_type="static"
         )
 
-        if user_id is None:
-            await update.message.reply_text(
-                "❌ Could not determine user.",
-                reply_to_message_id=update.message.message_id,
-            )
+        # Check if user_id is valid
+        if await self._handle_invalid_user_id(update, user_id):
             return False
 
         # Prompt for emoji
         await update.message.reply_text(
-            "📸 Great! Now just reply to this message with a single emoji for this sticker, like 🗿, 🔫, or 💩.\n\n❌ Use '/cancel' to cancel this request.",
+            f"📸 {self.EMOJI_PROMPT_BASE}",
             reply_to_message_id=update.message.message_id,
         )
         return True
@@ -180,16 +202,13 @@ class StickerBot:
             update, file_id, animation_message_id, media_type="video", duration=duration
         )
 
-        if user_id is None:
-            await update.message.reply_text(
-                "❌ Could not determine user.",
-                reply_to_message_id=update.message.message_id,
-            )
+        # Check if user_id is valid
+        if await self._handle_invalid_user_id(update, user_id):
             return False
 
         # Prompt for emoji
         await update.message.reply_text(
-            "🎬 Great! Now just reply to this message with a single emoji for this sticker, like 🗿, 🔫, or 💩.\n\n❌ Use '/cancel' to cancel this request.",
+            f"🎬 {self.EMOJI_PROMPT_BASE}",
             reply_to_message_id=update.message.message_id,
         )
         return True
@@ -257,7 +276,7 @@ class StickerBot:
         if update.message is None or not self.is_chat_allowed(update.message.chat_id):
             return
 
-        user_id = update.message.from_user.id if update.message.from_user else None
+        user_id = self._get_user_id(update)
         if user_id is None:
             return
 
@@ -330,7 +349,7 @@ class StickerBot:
         if update.message is None or not self.is_chat_allowed(update.message.chat_id):
             return
 
-        user_id = update.message.from_user.id if update.message.from_user else None
+        user_id = self._get_user_id(update)
         if user_id is None:
             return
 
