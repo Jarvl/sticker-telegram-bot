@@ -15,6 +15,7 @@ from telegram.constants import ParseMode
 from PIL import Image
 import io
 import emoji
+import subprocess
 
 from sticker_telegram_bot.config import Config
 
@@ -31,9 +32,37 @@ class StickerBot:
     PACK_PREFIX = "pack_"
     CALLBACK_DATA_SEPARATOR = "|"
 
+    # Message templates
+    EMOJI_PROMPT_BASE = (
+        "Great! Now just reply to this message with a single emoji for this sticker, "
+        "like 🗿, 🔫, or 💩.\n\n❌ Use '/cancel' to cancel this request."
+    )
+
     def __init__(self):
         self.application: Optional[Application] = None
         self.pending_stickers: Dict[int, Dict] = {}
+
+    def _get_user_id(self, update: Update) -> Optional[int]:
+        """Extract and validate user_id from update. Returns None if invalid."""
+        if update.message is None or update.message.from_user is None:
+            return None
+        return update.message.from_user.id
+
+    async def _validate_user_id(
+        self, update: Update, user_id: Optional[int]
+    ) -> bool:
+        """
+        Validate user_id and send error message if invalid.
+        Returns True if user_id is valid, False if invalid (caller should abort).
+        """
+        if user_id is None:
+            if update.message:
+                await update.message.reply_text(
+                    "❌ Could not determine user.",
+                    reply_to_message_id=update.message.message_id,
+                )
+            return False
+        return True
 
     @staticmethod
     def is_chat_allowed(chat_id: int) -> bool:
@@ -85,34 +114,92 @@ class StickerBot:
 
         return file_id, None
 
-    async def _setup_pending_sticker(
-        self, update: Update, file_id: Optional[str], image_message_id: int
-    ):
-        """Shared method to set up pending sticker and prompt for emoji."""
-        if update.message is None or file_id is None:
-            return False
-
-        # Get user ID and validate
-        user_id = update.message.from_user.id if update.message.from_user else None
-        if user_id is None:
-            await update.message.reply_text(
-                "❌ Could not determine user.",
-                reply_to_message_id=update.message.message_id,
+    async def _process_animation_message(self, message):
+        """Shared method to process animation messages and extract file ID and duration."""
+        # Check if the message contains an animation
+        if not message.animation:
+            return (
+                None,
+                None,
+                "❌ The message doesn't contain an animation. Please provide a GIF or animation.",
             )
+
+        # Get the animation file
+        animation = message.animation
+        file_id = animation.file_id
+        duration = animation.duration
+
+        return file_id, duration, None
+
+    async def _store_pending_sticker(
+        self,
+        update: Update,
+        file_id: str,
+        media_message_id: int,
+        media_type: str,
+        duration: Optional[float] = None,
+    ) -> bool:
+        """Store pending sticker data. Returns True if successful, False otherwise."""
+        # Get and validate user ID
+        user_id = self._get_user_id(update)
+        if not await self._validate_user_id(update, user_id):
             return False
 
         # Set up pending sticker
         self.pending_stickers[user_id] = {
-            "message_id": image_message_id,
+            "message_id": media_message_id,
             "file_id": file_id,
             "chat_id": update.message.chat_id,
             "user_message_id": update.message.message_id,
             "waiting_for_emoji": True,
+            "media_type": media_type,
         }
+
+        if duration is not None:
+            self.pending_stickers[user_id]["duration"] = duration
+
+        return True
+
+    async def _setup_pending_image_sticker(
+        self, update: Update, file_id: Optional[str], image_message_id: int
+    ):
+        """Set up pending image sticker and prompt for emoji."""
+        if update.message is None or file_id is None:
+            return False
+
+        # Store pending sticker (validates user_id internally)
+        if not await self._store_pending_sticker(
+            update, file_id, image_message_id, media_type="static"
+        ):
+            return False
 
         # Prompt for emoji
         await update.message.reply_text(
-            "📸 Great! Now just reply to this message with a single emoji for this sticker, like 🗿, 🔫, or 💩.\n\n❌ Use '/cancel' to cancel this request.",
+            f"📸 {self.EMOJI_PROMPT_BASE}",
+            reply_to_message_id=update.message.message_id,
+        )
+        return True
+
+    async def _setup_pending_animation_sticker(
+        self,
+        update: Update,
+        file_id: Optional[str],
+        animation_message_id: int,
+        duration: float,
+    ):
+        """Set up pending animation sticker and prompt for emoji."""
+        if update.message is None or file_id is None:
+            return False
+
+        # Store pending sticker (validates user_id internally)
+        if not await self._store_pending_sticker(
+            update, file_id, animation_message_id, media_type="video", duration=duration
+        ):
+            return False
+
+        # Prompt for emoji
+        await update.message.reply_text(
+            f"🎬 {self.EMOJI_PROMPT_BASE}",
             reply_to_message_id=update.message.message_id,
         )
         return True
@@ -143,6 +230,9 @@ class StickerBot:
             MessageHandler(
                 filters.PHOTO | filters.Document.IMAGE, self.handle_direct_image
             )
+        )
+        self.application.add_handler(
+            MessageHandler(filters.ANIMATION, self.handle_direct_animation)
         )
         self.application.add_handler(
             CallbackQueryHandler(
@@ -177,7 +267,7 @@ class StickerBot:
         if update.message is None or not self.is_chat_allowed(update.message.chat_id):
             return
 
-        user_id = update.message.from_user.id if update.message.from_user else None
+        user_id = self._get_user_id(update)
         if user_id is None:
             return
 
@@ -198,31 +288,50 @@ class StickerBot:
     async def handle_sticker_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ):
-        """Handle '/sticker' command when replied to an image."""
+        """Handle '/sticker' command when replied to an image or animation."""
         if update.message is None or not self.is_chat_allowed(update.message.chat_id):
             return
 
         # Check if this is a reply to another message
         if not update.message.reply_to_message:
             await update.message.reply_text(
-                "❌ Please reply to an image with the /sticker command.",
+                "❌ Please reply to an image or animation with the /sticker command.",
                 reply_to_message_id=update.message.message_id,
             )
             return
 
         replied_message = update.message.reply_to_message
 
-        # Process the image using shared method
-        file_id, error_message = await self._process_image_message(replied_message)
-        if error_message:
-            await update.message.reply_text(
-                error_message,
-                reply_to_message_id=update.message.message_id,
+        # Check if it's an animation first
+        if replied_message.animation:
+            file_id, duration, error_message = await self._process_animation_message(
+                replied_message
             )
-            return
+            if error_message:
+                await update.message.reply_text(
+                    error_message,
+                    reply_to_message_id=update.message.message_id,
+                )
+                return
 
-        # Set up pending sticker and prompt for emoji
-        await self._setup_pending_sticker(update, file_id, replied_message.message_id)
+            # Set up pending animation sticker and prompt for emoji
+            await self._setup_pending_animation_sticker(
+                update, file_id, replied_message.message_id, duration
+            )
+        else:
+            # Process as image
+            file_id, error_message = await self._process_image_message(replied_message)
+            if error_message:
+                await update.message.reply_text(
+                    error_message,
+                    reply_to_message_id=update.message.message_id,
+                )
+                return
+
+            # Set up pending image sticker and prompt for emoji
+            await self._setup_pending_image_sticker(
+                update, file_id, replied_message.message_id
+            )
 
     async def handle_emoji_response(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -231,7 +340,7 @@ class StickerBot:
         if update.message is None or not self.is_chat_allowed(update.message.chat_id):
             return
 
-        user_id = update.message.from_user.id if update.message.from_user else None
+        user_id = self._get_user_id(update)
         if user_id is None:
             return
 
@@ -291,7 +400,31 @@ class StickerBot:
             return
 
         # Set up pending sticker and prompt for emoji
-        await self._setup_pending_sticker(update, file_id, update.message.message_id)
+        await self._setup_pending_image_sticker(
+            update, file_id, update.message.message_id
+        )
+
+    async def handle_direct_animation(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Handle direct messages containing animations from allowed users."""
+        if update.message is None or not self.is_direct_message_allowed(
+            update.message.chat_id
+        ):
+            return
+
+        # Process the animation using shared method
+        file_id, duration, error_message = await self._process_animation_message(
+            update.message
+        )
+        if error_message:
+            # For direct messages, we silently ignore non-animation messages
+            return
+
+        # Set up pending sticker and prompt for emoji
+        await self._setup_pending_animation_sticker(
+            update, file_id, update.message.message_id, duration
+        )
 
     async def handle_sticker_pack_selection(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -353,11 +486,25 @@ class StickerBot:
             # Get the file
             file = await context.bot.get_file(pending_data["file_id"])
 
-            # Download the image
-            image_data = await file.download_as_bytearray()
+            # Download the media
+            media_data = await file.download_as_bytearray()
 
-            # Process the image for sticker requirements
-            processed_image = await self.process_image_for_sticker(bytes(image_data))
+            # Check media type and process accordingly
+            media_type = pending_data.get("media_type", "static")
+
+            if media_type == "video":
+                # Process video/animation for sticker requirements
+                duration = pending_data.get("duration", 0)
+                processed_media = await self.process_video_for_sticker(
+                    bytes(media_data), duration
+                )
+                sticker_format = "video"
+            else:
+                # Process image for sticker requirements
+                processed_media = await self.process_image_for_sticker(
+                    bytes(media_data)
+                )
+                sticker_format = "static"
 
             # Use the emoji provided by the user
             emoji = pending_data.get("emoji", "😀")
@@ -371,8 +518,9 @@ class StickerBot:
                 context=context,
                 sticker_set_name=sticker_set_name,
                 sticker_set_title=selected_pack,
-                image_data=processed_image,
+                image_data=processed_media,
                 emoji=emoji,
+                format=sticker_format,
             )
 
             # Clean up pending sticker
@@ -436,6 +584,79 @@ class StickerBot:
             logger.error(f"Error processing image: {e}")
             raise
 
+    async def process_video_for_sticker(
+        self, video_data: bytes, duration: float
+    ) -> bytes:
+        """Process video/animation to meet Telegram sticker requirements (WEBM VP9)."""
+        try:
+            # Build video filter string
+            filters = []
+
+            # Speed up video if longer than 3 seconds
+            if duration > 3.0:
+                speed_multiplier = duration / 3.0
+                logger.info(
+                    f"Video duration {duration}s > 3s, speeding up by {speed_multiplier}x"
+                )
+                filters.append(f"setpts=PTS/{speed_multiplier}")
+
+            # Scale to 512px on longest side, ensuring even dimensions (required by VP9)
+            # if(gt(iw,ih),512,-2) means: if width > height, set width to 512, else auto-scale to even
+            filters.append("scale='if(gt(iw,ih),512,-2)':'if(gt(iw,ih),-2,512)'")
+
+            # Set FPS to 30
+            filters.append("fps=30")
+
+            # Combine filters
+            vf_string = ",".join(filters)
+
+            # Build ffmpeg command with pipes
+            ffmpeg_cmd = [
+                "ffmpeg",
+                "-i", "pipe:0",  # Read from stdin
+                "-vf", vf_string,  # Apply video filters
+                "-c:v", "libvpx-vp9",  # VP9 codec
+                "-crf", "30",  # Quality (lower = better, 23-30 recommended)
+                "-b:v", "0",  # Use constant quality mode
+                "-deadline", "good",  # Encoding speed vs quality tradeoff
+                "-cpu-used", "4",  # Faster encoding (0-5, higher = faster)
+                "-an",  # No audio
+                "-f", "webm",  # Output format
+                "pipe:1"  # Write to stdout
+            ]
+
+            # Run ffmpeg with pipes (fully in-memory)
+            process = subprocess.Popen(
+                ffmpeg_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+
+            # Send input data and get output
+            webm_data, stderr = process.communicate(input=video_data)
+
+            # Check for errors
+            if process.returncode != 0:
+                error_msg = stderr.decode('utf-8', errors='ignore')
+                raise RuntimeError(f"ffmpeg failed: {error_msg}")
+
+            # Check file size
+            file_size_kb = len(webm_data) / 1024
+            logger.info(f"Processed video size: {file_size_kb:.2f} KB")
+
+            if file_size_kb > 256:
+                raise ValueError(
+                    f"Processed video is too large ({file_size_kb:.2f} KB > 256 KB). "
+                    "Try using a shorter or lower quality animation."
+                )
+
+            return webm_data
+
+        except Exception as e:
+            logger.error(f"Error processing video: {e}")
+            raise
+
     async def add_sticker_to_pack(
         self,
         context: ContextTypes.DEFAULT_TYPE,
@@ -443,10 +664,13 @@ class StickerBot:
         sticker_set_title: str,
         image_data: bytes,
         emoji: str,
+        format: str = "static",
     ):
         """Add sticker to a sticker pack."""
-        logger.info(f"Adding sticker to pack: {sticker_set_name} with emoji {emoji}")
-        sticker = InputSticker(sticker=image_data, emoji_list=[emoji], format="static")
+        logger.info(
+            f"Adding {format} sticker to pack: {sticker_set_name} with emoji {emoji}"
+        )
+        sticker = InputSticker(sticker=image_data, emoji_list=[emoji], format=format)
 
         try:
             # Create sticker set if it doesn't exist

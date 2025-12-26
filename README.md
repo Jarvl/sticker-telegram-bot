@@ -6,8 +6,9 @@ A powerful Telegram bot that allows users to easily add images to configured sti
 
 - ✅ **Group Chat Support**: Works in both private chats and group conversations
 - ✅ **Image to Sticker Conversion**: Reply to any image with "sticker" to add it to a pack
+- ✅ **Animated Sticker Support**: Convert GIFs to animated stickers (WEBM VP9 format)
 - ✅ **Multiple Sticker Packs**: Configure multiple sticker packs via environment variables
-- ✅ **Image Processing**: Automatically processes images to meet Telegram's sticker requirements
+- ✅ **Media Processing**: Automatically processes images and animations to meet Telegram's sticker requirements
 - ✅ **Interactive Selection**: Users can choose which sticker pack to add images to
 - ✅ **Webhook Support**: Supports both polling and webhook modes
 
@@ -15,6 +16,7 @@ A powerful Telegram bot that allows users to easily add images to configured sti
 
 - Python 3.11+ (managed with pyenv)
 - [Poetry](https://python-poetry.org/) for dependency management
+- [FFmpeg](https://ffmpeg.org/) for animated sticker conversion
 - Telegram Bot Token (from [@BotFather](https://t.me/BotFather))
 - At least one sticker pack configured
 
@@ -62,12 +64,24 @@ A powerful Telegram bot that allows users to easily add images to configured sti
    pyenv local 3.11.4
    ```
 
-3. **Install dependencies with Poetry:**
+3. **Install FFmpeg:**
+   ```bash
+   # On macOS
+   brew install ffmpeg
+
+   # On Ubuntu/Debian
+   sudo apt-get install ffmpeg
+
+   # On Windows (using Chocolatey)
+   choco install ffmpeg
+   ```
+
+4. **Install dependencies with Poetry:**
    ```bash
    poetry install
    ```
 
-4. **Set up environment variables:**
+5. **Set up environment variables:**
    - Copy and edit your `.env` file as needed (see below for required variables).
 
 ## Configuration
@@ -123,16 +137,25 @@ make lint          # Run flake8 linter
 ### Using the Bot
 
 1. **Add the bot to a group or start a private chat**
-2. **Send an image to the chat**
-3. **Reply to the image with the command `sticker`**
-4. **Select which sticker pack to add the image to**
-5. **The image will be processed and added to your chosen pack**
+2. **Send an image or GIF to the chat**
+3. **Reply to the image/GIF with the command `sticker`** (or send directly in allowed chats)
+4. **Send an emoji for the sticker** (e.g., 🗿, 🔫, 💩)
+5. **Select which sticker pack to add it to**
+6. **The media will be processed and added to your chosen pack**
 
 ### Bot Commands
 
 - `/start` - Welcome message and basic instructions
 - `/help` - Detailed help and available sticker packs
-- `/sticker <emoji>` - Reply to an image with an emoji to add it to a sticker pack
+- `/sticker` - Reply to an image or GIF to add it to a sticker pack
+- `/cancel` - Cancel any pending sticker request
+
+### Animated Sticker Notes
+
+- GIFs are automatically converted to WEBM VP9 format
+- If a GIF is longer than 3 seconds, it will be sped up to fit the requirement
+- Maximum file size after conversion: 256 KB
+- If a GIF cannot be compressed enough, it will be rejected
 
 ## Docker Support
 

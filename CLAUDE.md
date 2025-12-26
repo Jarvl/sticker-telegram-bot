@@ -65,15 +65,18 @@ make clean                  # Clean Python cache and logs
 
 ### Bot Workflow
 
-1. **Image Submission Flow**:
-   - User replies to an image with `/sticker` command OR sends direct image (if allowed chat)
-   - Bot extracts file_id and stores in `pending_stickers` dict keyed by user_id
-   - Bot prompts user for emoji
+1. **Media Submission Flow** (Images and Animations):
+   - User replies to an image/GIF with `/sticker` command OR sends direct media (if allowed chat)
+   - Bot extracts file_id (and duration for animations) and stores in `pending_stickers` dict keyed by user_id
+   - Bot prompts user for emoji (📸 for images, 🎬 for animations)
    - User sends emoji response (validated with `emoji.is_emoji()`)
    - Bot presents inline keyboard with available sticker packs
    - User selects pack via callback query
-   - Bot processes image (resize to 512x512, RGBA, centered on transparent canvas)
-   - Bot adds sticker to pack (creates pack if doesn't exist)
+   - Bot processes media:
+     - **Images**: resize to 512x512, RGBA, centered on transparent canvas
+     - **Animations**: convert to WEBM VP9 (see Video Processing below)
+   - Bot adds sticker to pack with appropriate format ("static" or "video")
+   - Creates pack if it doesn't exist
 
 2. **State Management**:
    - `pending_stickers` dict tracks user submissions with structure:
@@ -85,28 +88,52 @@ make clean                  # Clean Python cache and logs
          "chat_id": int,
          "user_message_id": int,
          "waiting_for_emoji": bool,
+         "media_type": str,  # "static" or "video"
+         "duration": float,  # optional, for animations only
          "emoji": str  # added after emoji response
        }
      }
      ```
    - Use `/cancel` command to clear pending state
+   - Common logic extracted to `_store_pending_sticker()` helper
+   - Separate setup methods: `_setup_pending_image_sticker()` and `_setup_pending_animation_sticker()`
 
-3. **Access Control**:
+3. **Animation Detection**:
+   - Telegram auto-converts GIFs to MP4 animations (`message.animation`)
+   - `filters.ANIMATION` catches GIF uploads
+   - Animations handled separately from images with dedicated handler
+   - Duration extracted from animation metadata for processing
+
+4. **Access Control**:
    - `is_chat_allowed()`: Checks if chat_id is in ALLOWED_CHAT_IDS (or allows all if None)
    - `is_direct_message_allowed()`: Additionally checks chat_id > 0 (positive = DM, negative = group)
    - Direct image handling only works in allowed DMs
 
-4. **Callback Data Format**:
+5. **Callback Data Format**:
    - Pack selection buttons use format: `pack_{pack_name}|{user_id}`
    - Validated in `handle_sticker_pack_selection()` to prevent unauthorized access
 
-### Image Processing
+### Media Processing
 
-Images are processed in `process_image_for_sticker()`:
+**Images** are processed in `process_image_for_sticker()`:
 - Convert to RGBA mode
 - Resize maintaining aspect ratio (max 512px on any side)
 - Center on 512x512 transparent canvas using PIL
 - Output as PNG bytes
+
+**Animations** are processed in `process_video_for_sticker()`:
+- Uses ffmpeg directly via subprocess with pipes (fully in-memory processing)
+- No temporary files created - uses stdin/stdout pipes
+- Conversion specs:
+  - Codec: VP9 (libvpx-vp9)
+  - Resolution: 512px on longest side with even dimensions via scale filter
+  - FPS: 30 constant via fps filter
+  - Audio: stripped with `-an`
+  - Duration: if >3s, speeds up video using setpts filter
+  - Quality: CRF 30 with constant quality mode
+- Filter chain: `setpts,scale,fps` combined with `,`.join()
+- File size validation: rejects if >256KB
+- Error handling via process.returncode and stderr
 
 ### Sticker Pack Naming
 
@@ -145,6 +172,7 @@ Optional environment variables:
 - `pydantic` (v2.11): Used for config validation patterns
 - `emoji` (v2.14): Emoji validation
 - `python-dotenv` (v1.1): Environment variable loading
+- System `ffmpeg`: Video processing via subprocess pipes (no Python wrapper)
 
 ## Notes for Development
 
@@ -153,3 +181,5 @@ Optional environment variables:
 - Error messages use emojis and friendly language (e.g., "🗿 Hey that's a nice sticker suggestion...")
 - HTML formatting is used in success messages with fallback to plain text if parsing fails
 - Logging is configured at INFO level with timestamp, name, level, and message format
+- FFmpeg must be installed on the system for animated sticker support (installed in Dockerfile)
+- Video processing is fully in-memory using subprocess pipes (no temporary files)
