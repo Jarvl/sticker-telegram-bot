@@ -51,12 +51,12 @@ class StickerBot:
             return None
         return update.message.from_user.id
 
-    async def _handle_invalid_user_id(
+    async def _validate_user_id(
         self, update: Update, user_id: Optional[int]
     ) -> bool:
         """
-        Check if user_id is invalid and send error message if so.
-        Returns True if user_id is invalid (caller should abort), False if valid.
+        Validate user_id and send error message if invalid.
+        Returns True if user_id is valid, False if invalid (caller should abort).
         """
         if user_id is None:
             if update.message:
@@ -64,8 +64,8 @@ class StickerBot:
                     "❌ Could not determine user.",
                     reply_to_message_id=update.message.message_id,
                 )
-            return True
-        return False
+            return False
+        return True
 
     @staticmethod
     def is_chat_allowed(chat_id: int) -> bool:
@@ -175,8 +175,8 @@ class StickerBot:
             update, file_id, image_message_id, media_type="static"
         )
 
-        # Check if user_id is valid
-        if await self._handle_invalid_user_id(update, user_id):
+        # Validate user_id
+        if not await self._validate_user_id(update, user_id):
             return False
 
         # Prompt for emoji
@@ -202,8 +202,8 @@ class StickerBot:
             update, file_id, animation_message_id, media_type="video", duration=duration
         )
 
-        # Check if user_id is valid
-        if await self._handle_invalid_user_id(update, user_id):
+        # Validate user_id
+        if not await self._validate_user_id(update, user_id):
             return False
 
         # Prompt for emoji
