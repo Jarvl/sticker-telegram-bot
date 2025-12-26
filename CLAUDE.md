@@ -122,17 +122,18 @@ make clean                  # Clean Python cache and logs
 - Output as PNG bytes
 
 **Animations** are processed in `process_video_for_sticker()`:
-- Uses moviepy library (requires ffmpeg system dependency)
-- Writes input to temp file, outputs WEBM to temp file
+- Uses ffmpeg directly via subprocess with pipes (fully in-memory processing)
+- No temporary files created - uses stdin/stdout pipes
 - Conversion specs:
-  - Codec: VP9 (libvpx-vp9) via `write_videofile()`
-  - Resolution: 512px on longest side (maintains aspect ratio) using `resize()`
-  - FPS: 30 constant using `set_fps()`
-  - Audio: stripped with `audio=False`
-  - Duration: if >3s, speeds up video using `fx(vfx.speedx, multiplier)`
+  - Codec: VP9 (libvpx-vp9)
+  - Resolution: 512px on longest side with even dimensions via scale filter
+  - FPS: 30 constant via fps filter
+  - Audio: stripped with `-an`
+  - Duration: if >3s, speeds up video using setpts filter
   - Quality: CRF 30 with constant quality mode
+- Filter chain: `setpts,scale,fps` combined with `,`.join()
 - File size validation: rejects if >256KB
-- Closes clip and cleans up temp files in finally block
+- Error handling via process.returncode and stderr
 
 ### Sticker Pack Naming
 
@@ -171,7 +172,7 @@ Optional environment variables:
 - `pydantic` (v2.11): Used for config validation patterns
 - `emoji` (v2.14): Emoji validation
 - `python-dotenv` (v1.1): Environment variable loading
-- `moviepy` (v2.2): Video editing library for animated stickers (requires system ffmpeg)
+- System `ffmpeg`: Video processing via subprocess pipes (no Python wrapper)
 
 ## Notes for Development
 
@@ -181,4 +182,4 @@ Optional environment variables:
 - HTML formatting is used in success messages with fallback to plain text if parsing fails
 - Logging is configured at INFO level with timestamp, name, level, and message format
 - FFmpeg must be installed on the system for animated sticker support (installed in Dockerfile)
-- Temp files are created during video processing and cleaned up in finally blocks
+- Video processing is fully in-memory using subprocess pipes (no temporary files)

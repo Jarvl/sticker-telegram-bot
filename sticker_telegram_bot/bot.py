@@ -15,10 +15,7 @@ from telegram.constants import ParseMode
 from PIL import Image
 import io
 import emoji
-from moviepy.editor import VideoFileClip
-import moviepy.video.fx.all as vfx
-import tempfile
-import os
+import subprocess
 
 from sticker_telegram_bot.config import Config
 
@@ -591,27 +588,9 @@ class StickerBot:
         self, video_data: bytes, duration: float
     ) -> bytes:
         """Process video/animation to meet Telegram sticker requirements (WEBM VP9)."""
-        temp_input = None
-        temp_output = None
-        clip = None
-
         try:
-            # Create temporary files
-            with tempfile.NamedTemporaryFile(
-                suffix=".mp4", delete=False
-            ) as temp_input_file:
-                temp_input = temp_input_file.name
-                temp_input_file.write(video_data)
-
-            temp_output = tempfile.NamedTemporaryFile(
-                suffix=".webm", delete=False
-            ).name
-
-            # Load video clip
-            clip = VideoFileClip(temp_input)
-
-            # Get dimensions
-            width, height = clip.size
+            # Build video filter string
+            filters = []
 
             # Speed up video if longer than 3 seconds
             if duration > 3.0:
@@ -619,48 +598,48 @@ class StickerBot:
                 logger.info(
                     f"Video duration {duration}s > 3s, speeding up by {speed_multiplier}x"
                 )
-                clip = clip.fx(vfx.speedx, speed_multiplier)
+                filters.append(f"setpts=PTS/{speed_multiplier}")
 
-            # Calculate new dimensions (512px on longest side)
-            if width > height:
-                new_width = 512
-                new_height = int(height * (512 / width))
-            else:
-                new_height = 512
-                new_width = int(width * (512 / height))
+            # Scale to 512px on longest side, ensuring even dimensions (required by VP9)
+            # if(gt(iw,ih),512,-2) means: if width > height, set width to 512, else auto-scale to even
+            filters.append("scale='if(gt(iw,ih),512,-2)':'if(gt(iw,ih),-2,512)'")
 
-            # Ensure dimensions are even (required by VP9)
-            new_width = new_width if new_width % 2 == 0 else new_width - 1
-            new_height = new_height if new_height % 2 == 0 else new_height - 1
+            # Set FPS to 30
+            filters.append("fps=30")
 
-            # Resize clip
-            clip = clip.resize((new_width, new_height))
+            # Combine filters
+            vf_string = ",".join(filters)
 
-            # Set FPS
-            clip = clip.set_fps(30)
+            # Build ffmpeg command with pipes
+            ffmpeg_cmd = [
+                "ffmpeg",
+                "-i", "pipe:0",  # Read from stdin
+                "-vf", vf_string,  # Apply video filters
+                "-c:v", "libvpx-vp9",  # VP9 codec
+                "-crf", "30",  # Quality (lower = better, 23-30 recommended)
+                "-b:v", "0",  # Use constant quality mode
+                "-deadline", "good",  # Encoding speed vs quality tradeoff
+                "-cpu-used", "4",  # Faster encoding (0-5, higher = faster)
+                "-an",  # No audio
+                "-f", "webm",  # Output format
+                "pipe:1"  # Write to stdout
+            ]
 
-            # Write to WEBM with VP9 codec
-            clip.write_videofile(
-                temp_output,
-                codec="libvpx-vp9",
-                audio=False,
-                ffmpeg_params=[
-                    "-crf",
-                    "30",  # Quality (lower = better, 23-30 recommended)
-                    "-b:v",
-                    "0",  # Use constant quality mode
-                    "-deadline",
-                    "good",  # Encoding speed vs quality tradeoff
-                    "-cpu-used",
-                    "4",  # Faster encoding (0-5, higher = faster)
-                ],
-                verbose=False,
-                logger=None,
+            # Run ffmpeg with pipes (fully in-memory)
+            process = subprocess.Popen(
+                ffmpeg_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
             )
 
-            # Read the output file
-            with open(temp_output, "rb") as f:
-                webm_data = f.read()
+            # Send input data and get output
+            webm_data, stderr = process.communicate(input=video_data)
+
+            # Check for errors
+            if process.returncode != 0:
+                error_msg = stderr.decode('utf-8', errors='ignore')
+                raise RuntimeError(f"ffmpeg failed: {error_msg}")
 
             # Check file size
             file_size_kb = len(webm_data) / 1024
@@ -677,15 +656,6 @@ class StickerBot:
         except Exception as e:
             logger.error(f"Error processing video: {e}")
             raise
-        finally:
-            # Close clip
-            if clip is not None:
-                clip.close()
-            # Clean up temporary files
-            if temp_input and os.path.exists(temp_input):
-                os.unlink(temp_input)
-            if temp_output and os.path.exists(temp_output):
-                os.unlink(temp_output)
 
     async def add_sticker_to_pack(
         self,
