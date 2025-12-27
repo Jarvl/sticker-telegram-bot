@@ -604,6 +604,13 @@ class StickerBot:
             # if(gt(iw,ih),512,-2) means: if width > height, set width to 512, else auto-scale to even
             filters.append("scale='if(gt(iw,ih),512,-2)':'if(gt(iw,ih),-2,512)'")
 
+            # Enable alpha channel for transparency
+            filters.append("format=yuva420p")
+
+            # Pad to 512x512 with transparent background and center the video
+            # (ow-iw)/2 and (oh-ih)/2 center the video on the canvas
+            filters.append("pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000")
+
             # Set FPS to 30
             filters.append("fps=30")
 
