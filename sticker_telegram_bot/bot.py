@@ -604,13 +604,6 @@ class StickerBot:
             # force_original_aspect_ratio=decrease ensures longest dimension becomes 512px
             filters.append("scale=512:512:force_original_aspect_ratio=decrease")
 
-            # Enable alpha channel for transparency
-            filters.append("format=yuva420p")
-
-            # Pad to 512x512 with transparent background and center the video
-            # (ow-iw)/2 and (oh-ih)/2 center the video on the canvas
-            filters.append("pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000")
-
             # Set FPS to 30
             filters.append("fps=30")
 

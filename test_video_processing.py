@@ -106,6 +106,7 @@ def run_ffmpeg(input_file: str, filter_chain: str, output_file: str, full_pipeli
         # Add full VP9 encoding options
         cmd.extend([
             "-c:v", "libvpx-vp9",
+            "-pix_fmt", "yuva420p",  # Required for alpha transparency
             "-crf", "30",
             "-b:v", "0",
             "-deadline", "good",
@@ -116,6 +117,7 @@ def run_ffmpeg(input_file: str, filter_chain: str, output_file: str, full_pipeli
         # Simple encoding for intermediate steps
         cmd.extend([
             "-c:v", "libvpx-vp9",
+            "-pix_fmt", "yuva420p",  # Required for alpha transparency
             "-crf", "30",
             "-b:v", "0",
             "-an",
