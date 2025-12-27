@@ -486,8 +486,31 @@ class StickerBot:
             # Get the file
             file = await context.bot.get_file(pending_data["file_id"])
 
+            # Log file info for debugging
+            logger.info(f"Downloading file: size={file.file_size} bytes, path={file.file_path}")
+
             # Download the media
             media_data = await file.download_as_bytearray()
+
+            # Validate download completed successfully
+            if not media_data or len(media_data) == 0:
+                raise ValueError("Downloaded file is empty")
+
+            if file.file_size and len(media_data) != file.file_size:
+                logger.warning(
+                    f"Download size mismatch: expected {file.file_size}, got {len(media_data)}"
+                )
+                # Try downloading again
+                logger.info("Retrying download...")
+                media_data = await file.download_as_bytearray()
+
+                if len(media_data) != file.file_size:
+                    raise ValueError(
+                        f"Download incomplete: expected {file.file_size} bytes, "
+                        f"received {len(media_data)} bytes"
+                    )
+
+            logger.info(f"Successfully downloaded {len(media_data)} bytes")
 
             # Check media type and process accordingly
             media_type = pending_data.get("media_type", "static")
@@ -615,6 +638,12 @@ class StickerBot:
             # Combine filters
             vf_string = ",".join(filters)
 
+            # Log input info for debugging
+            logger.info(
+                f"Processing video: size={len(video_data)} bytes, "
+                f"duration={duration}s, filters={vf_string}"
+            )
+
             # Build ffmpeg command with pipes
             ffmpeg_cmd = [
                 "ffmpeg",
@@ -644,7 +673,17 @@ class StickerBot:
             # Check for errors
             if process.returncode != 0:
                 error_msg = stderr.decode('utf-8', errors='ignore')
-                raise RuntimeError(f"ffmpeg failed: {error_msg}")
+                logger.error(f"ffmpeg failed with return code {process.returncode}")
+                logger.error(f"Input data size: {len(video_data)} bytes")
+
+                # Check for common error patterns
+                if "partial file" in error_msg.lower() or "invalid data" in error_msg.lower():
+                    raise RuntimeError(
+                        f"Video file appears corrupted or incomplete. "
+                        f"Try uploading the animation again. Error: {error_msg}"
+                    )
+                else:
+                    raise RuntimeError(f"ffmpeg failed: {error_msg}")
 
             # Check file size
             file_size_kb = len(webm_data) / 1024
