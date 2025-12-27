@@ -600,9 +600,9 @@ class StickerBot:
                 )
                 filters.append(f"setpts=PTS/{speed_multiplier}")
 
-            # Scale to 512px on longest side, ensuring even dimensions (required by VP9)
-            # if(gt(iw,ih),512,-2) means: if width > height, set width to 512, else auto-scale to even
-            filters.append("scale='if(gt(iw,ih),512,-2)':'if(gt(iw,ih),-2,512)'")
+            # Scale to fit within 512x512 while maintaining aspect ratio
+            # force_original_aspect_ratio=decrease ensures longest dimension becomes 512px
+            filters.append("scale=512:512:force_original_aspect_ratio=decrease")
 
             # Enable alpha channel for transparency
             filters.append("format=yuva420p")
