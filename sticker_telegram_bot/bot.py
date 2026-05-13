@@ -1,8 +1,5 @@
 import logging
 import re
-import hashlib
-import json
-import time
 from typing import Dict, Optional
 from telegram import InputSticker, Update, InlineKeyboardButton, InlineKeyboardMarkup
 import telegram
@@ -30,50 +27,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# region agent log
-def _agent_debug_log(hypothesis_id: str, location: str, message: str, data: Dict):
-    payload = {
-        "sessionId": "f2b8d8",
-        "runId": "initial",
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    try:
-        with open(
-            "/Users/andrew/Projects/sticker-telegram-bot/.cursor/debug-f2b8d8.log",
-            "a",
-            encoding="utf-8",
-        ) as debug_file:
-            debug_file.write(json.dumps(payload, default=str) + "\n")
-    except Exception:
-        pass
-# endregion
-
-
-def _agent_mp4_boxes(data: bytes, limit: int = 12):
-    boxes = []
-    offset = 0
-    data_len = len(data)
-    while offset + 8 <= data_len and len(boxes) < limit:
-        size = int.from_bytes(data[offset : offset + 4], "big")
-        box_type = data[offset + 4 : offset + 8].decode("latin-1", errors="replace")
-        header_size = 8
-        if size == 1 and offset + 16 <= data_len:
-            size = int.from_bytes(data[offset + 8 : offset + 16], "big")
-            header_size = 16
-        elif size == 0:
-            size = data_len - offset
-        if size < header_size:
-            boxes.append({"offset": offset, "type": box_type, "size": size, "invalid": True})
-            break
-        boxes.append({"offset": offset, "type": box_type, "size": size})
-        offset += size
-    return boxes
-
-
 class StickerBot:
     """Telegram bot for managing sticker packs."""
 
@@ -96,9 +49,7 @@ class StickerBot:
             return None
         return update.message.from_user.id
 
-    async def _validate_user_id(
-        self, update: Update, user_id: Optional[int]
-    ) -> bool:
+    async def _validate_user_id(self, update: Update, user_id: Optional[int]) -> bool:
         """
         Validate user_id and send error message if invalid.
         Returns True if user_id is valid, False if invalid (caller should abort).
@@ -534,30 +485,13 @@ class StickerBot:
             # Get the file
             file = await context.bot.get_file(pending_data["file_id"])
 
-            # Log file info for debugging
-            logger.info(f"Downloading file: size={file.file_size} bytes, path={file.file_path}")
+            # Log Telegram file metadata before download
+            logger.info(
+                f"Downloading file: size={file.file_size} bytes, path={file.file_path}"
+            )
 
             # Download the media
             media_data = await file.download_as_bytearray()
-
-            # region agent log
-            _agent_debug_log(
-                "H2",
-                "sticker_telegram_bot/bot.py:494",
-                "telegram download completed",
-                {
-                    "expected_file_size": file.file_size,
-                    "actual_download_size": len(media_data) if media_data else 0,
-                    "media_type": pending_data.get("media_type", "static"),
-                    "duration": pending_data.get("duration", 0),
-                    "sha256_16": hashlib.sha256(bytes(media_data)).hexdigest()[:16]
-                    if media_data
-                    else None,
-                    "prefix_hex": bytes(media_data[:16]).hex() if media_data else None,
-                    "suffix_hex": bytes(media_data[-16:]).hex() if media_data else None,
-                },
-            )
-            # endregion
 
             # Validate download completed successfully
             if not media_data or len(media_data) == 0:
@@ -616,7 +550,7 @@ class StickerBot:
             # Clean up pending sticker
             del self.pending_stickers[user_id]
 
-            # Log the exact message being sent for debugging
+            # Log the exact message being sent
             success_message = (
                 f"Thank you daddy 💕. Sticker added to "
                 f'<a href="https://t.me/addstickers/{sticker_set_name}">{selected_pack}</a>.\n\n'
@@ -682,7 +616,7 @@ class StickerBot:
             # Build video filter string
             filters = []
 
-            # Speed up video if longer than 3 seconds
+            # Telegram video stickers must be 3 seconds or shorter.
             if duration > 3.0:
                 speed_multiplier = duration / 3.0
                 logger.info(
@@ -705,43 +639,15 @@ class StickerBot:
             # Combine filters
             vf_string = ",".join(filters)
 
-            # Log input info for debugging
+            # Log input info before processing
             logger.info(
                 f"Processing video: size={len(video_data)} bytes, "
                 f"duration={duration}s, filters={vf_string}"
             )
-            # region agent log
-            _agent_debug_log(
-                "H1,H2,H5",
-                "sticker_telegram_bot/bot.py:663",
-                "ffmpeg input bytes prepared",
-                {
-                    "input_size": len(video_data),
-                    "duration": duration,
-                    "filters": vf_string,
-                    "sha256_16": hashlib.sha256(video_data).hexdigest()[:16],
-                    "prefix_hex": video_data[:16].hex(),
-                    "suffix_hex": video_data[-16:].hex(),
-                    "mp4_boxes": _agent_mp4_boxes(video_data),
-                },
-            )
-            # endregion
 
             with tempfile.NamedTemporaryFile(suffix=".mp4") as input_file:
                 input_file.write(video_data)
                 input_file.flush()
-
-                # region agent log
-                _agent_debug_log(
-                    "H1",
-                    "sticker_telegram_bot/bot.py:734",
-                    "ffmpeg seekable input prepared",
-                    {
-                        "input_size": len(video_data),
-                        "input_mode": "seekable_temp_file",
-                    },
-                )
-                # endregion
 
                 # Build ffmpeg command with seekable input and in-memory output.
                 ffmpeg_cmd = [
@@ -774,26 +680,6 @@ class StickerBot:
 
                 webm_data, stderr = process.communicate()
             stderr_text = stderr.decode("utf-8", errors="ignore")
-            # region agent log
-            _agent_debug_log(
-                "H1,H3,H4,H5",
-                "sticker_telegram_bot/bot.py:695",
-                "ffmpeg process exited",
-                {
-                    "returncode": process.returncode,
-                    "stdout_size": len(webm_data),
-                    "stderr_size": len(stderr),
-                    "partial_file": "partial file" in stderr_text.lower(),
-                    "invalid_data": "invalid data" in stderr_text.lower(),
-                    "unspecified_pixel_format": "unspecified pixel format"
-                    in stderr_text.lower(),
-                    "could_not_find_codec_parameters": (
-                        "could not find codec parameters" in stderr_text.lower()
-                    ),
-                    "stderr_tail": stderr_text[-2000:],
-                },
-            )
-            # endregion
 
             # Check for errors
             if process.returncode != 0:
@@ -802,7 +688,10 @@ class StickerBot:
                 logger.error(f"Input data size: {len(video_data)} bytes")
 
                 # Check for common error patterns
-                if "partial file" in error_msg.lower() or "invalid data" in error_msg.lower():
+                if (
+                    "partial file" in error_msg.lower()
+                    or "invalid data" in error_msg.lower()
+                ):
                     raise RuntimeError(
                         f"Video file appears corrupted or incomplete. "
                         f"Try uploading the animation again. Error: {error_msg}"
