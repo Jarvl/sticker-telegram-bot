@@ -64,3 +64,4 @@ Thumbs.db
 .venv/
 
 test_output/
+test_input/

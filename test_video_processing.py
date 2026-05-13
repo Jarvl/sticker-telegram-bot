@@ -33,16 +33,25 @@ def run_ffprobe(file_path: str) -> Tuple[int, int]:
 
     # Use ffprobe with explicit output format
     cmd = [
-        "docker", "run", "--rm",
-        "-v", f"{work_dir}:/work",
-        "-w", "/work",
-        "--entrypoint", "ffprobe",
+        "docker",
+        "run",
+        "--rm",
+        "-v",
+        f"{work_dir}:/work",
+        "-w",
+        "/work",
+        "--entrypoint",
+        "ffprobe",
         DOCKER_IMAGE,
-        "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=width,height",
-        "-of", "csv=p=0",
-        filename
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-of",
+        "csv=p=0",
+        filename,
     ]
 
     try:
@@ -51,8 +60,8 @@ def run_ffprobe(file_path: str) -> Tuple[int, int]:
         output = result.stdout.strip()
 
         # Output format will be: "width,height"
-        if ',' in output:
-            width, height = output.split(',')
+        if "," in output:
+            width, height = output.split(",")
             return int(width), int(height)
         else:
             raise ValueError(f"Unexpected ffprobe output format: {output}")
@@ -64,7 +73,9 @@ def run_ffprobe(file_path: str) -> Tuple[int, int]:
         raise
 
 
-def run_ffmpeg(input_file: str, filter_chain: str, output_file: str, full_pipeline: bool = False) -> Tuple[int, int]:
+def run_ffmpeg(
+    input_file: str, filter_chain: str, output_file: str, full_pipeline: bool = False
+) -> Tuple[int, int]:
     """
     Run ffmpeg in Docker with specified filter chain.
 
@@ -93,42 +104,63 @@ def run_ffmpeg(input_file: str, filter_chain: str, output_file: str, full_pipeli
     # Mount both input directory and current working directory
     # Note: linuxserver/ffmpeg image has ffmpeg as entrypoint, so we don't specify it again
     cmd = [
-        "docker", "run", "--rm",
-        "-v", f"{input_dir}:/input",
-        "-v", f"{cwd}:/work",
-        "-w", "/work",
+        "docker",
+        "run",
+        "--rm",
+        "-v",
+        f"{input_dir}:/input",
+        "-v",
+        f"{cwd}:/work",
+        "-w",
+        "/work",
         DOCKER_IMAGE,
-        "-i", f"/input/{os.path.basename(abs_input)}",
-        "-vf", filter_chain,
+        "-i",
+        f"/input/{os.path.basename(abs_input)}",
+        "-vf",
+        filter_chain,
     ]
 
     if full_pipeline:
         # Add full VP9 encoding options
-        cmd.extend([
-            "-c:v", "libvpx-vp9",
-            "-pix_fmt", "yuva420p",  # Required for alpha transparency
-            "-crf", "30",
-            "-b:v", "0",
-            "-deadline", "good",
-            "-cpu-used", "4",
-            "-an",
-        ])
+        cmd.extend(
+            [
+                "-c:v",
+                "libvpx-vp9",
+                "-pix_fmt",
+                "yuva420p",  # Required for alpha transparency
+                "-crf",
+                "30",
+                "-b:v",
+                "0",
+                "-deadline",
+                "good",
+                "-cpu-used",
+                "4",
+                "-an",
+            ]
+        )
     else:
         # Simple encoding for intermediate steps
-        cmd.extend([
-            "-c:v", "libvpx-vp9",
-            "-pix_fmt", "yuva420p",  # Required for alpha transparency
-            "-crf", "30",
-            "-b:v", "0",
-            "-an",
-        ])
+        cmd.extend(
+            [
+                "-c:v",
+                "libvpx-vp9",
+                "-pix_fmt",
+                "yuva420p",  # Required for alpha transparency
+                "-crf",
+                "30",
+                "-b:v",
+                "0",
+                "-an",
+            ]
+        )
 
     # Output path relative to /work
     output_rel = os.path.relpath(abs_output, cwd)
     cmd.append(output_rel)
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        subprocess.run(cmd, capture_output=True, text=True, check=True)
         # Get dimensions of output file
         return run_ffprobe(output_file)
     except subprocess.CalledProcessError as e:
@@ -190,11 +222,7 @@ def test_video_processing(input_file: str) -> dict:
     output_dir = Path("test_output")
     output_dir.mkdir(exist_ok=True)
 
-    results = {
-        "input_file": input_file,
-        "steps": [],
-        "overall_pass": True
-    }
+    results = {"input_file": input_file, "steps": [], "overall_pass": True}
 
     print(f"Testing video processing: {input_file}")
     print("=" * 60)
@@ -212,7 +240,9 @@ def test_video_processing(input_file: str) -> dict:
         return results
 
     # Calculate expected dimensions after scale
-    expected_scaled_w, expected_scaled_h = calculate_expected_scale(input_width, input_height)
+    expected_scaled_w, expected_scaled_h = calculate_expected_scale(
+        input_width, input_height
+    )
 
     # Step 1: Scale only
     print("Step 1: Scale")
@@ -223,19 +253,21 @@ def test_video_processing(input_file: str) -> dict:
         actual_w, actual_h = run_ffmpeg(
             input_file,
             "scale=512:512:force_original_aspect_ratio=decrease",
-            str(output_dir / "step1_scale.webm")
+            str(output_dir / "step1_scale.webm"),
         )
         print(f"  Actual: {actual_w}x{actual_h}")
 
-        step1_pass = (actual_w == expected_scaled_w and actual_h == expected_scaled_h)
+        step1_pass = actual_w == expected_scaled_w and actual_h == expected_scaled_h
         print(f"  Status: {'✅ PASS' if step1_pass else '❌ FAIL'}")
 
-        results["steps"].append({
-            "name": "Scale",
-            "expected": (expected_scaled_w, expected_scaled_h),
-            "actual": (actual_w, actual_h),
-            "pass": step1_pass
-        })
+        results["steps"].append(
+            {
+                "name": "Scale",
+                "expected": (expected_scaled_w, expected_scaled_h),
+                "actual": (actual_w, actual_h),
+                "pass": step1_pass,
+            }
+        )
 
         if not step1_pass:
             results["overall_pass"] = False
@@ -255,19 +287,21 @@ def test_video_processing(input_file: str) -> dict:
         actual_w, actual_h = run_ffmpeg(
             input_file,
             "scale=512:512:force_original_aspect_ratio=decrease,format=yuva420p",
-            str(output_dir / "step2_format.webm")
+            str(output_dir / "step2_format.webm"),
         )
         print(f"  Actual: {actual_w}x{actual_h}")
 
-        step2_pass = (actual_w == expected_scaled_w and actual_h == expected_scaled_h)
+        step2_pass = actual_w == expected_scaled_w and actual_h == expected_scaled_h
         print(f"  Status: {'✅ PASS' if step2_pass else '❌ FAIL'}")
 
-        results["steps"].append({
-            "name": "Format",
-            "expected": (expected_scaled_w, expected_scaled_h),
-            "actual": (actual_w, actual_h),
-            "pass": step2_pass
-        })
+        results["steps"].append(
+            {
+                "name": "Format",
+                "expected": (expected_scaled_w, expected_scaled_h),
+                "actual": (actual_w, actual_h),
+                "pass": step2_pass,
+            }
+        )
 
         if not step2_pass:
             results["overall_pass"] = False
@@ -287,19 +321,21 @@ def test_video_processing(input_file: str) -> dict:
         actual_w, actual_h = run_ffmpeg(
             input_file,
             "scale=512:512:force_original_aspect_ratio=decrease,format=yuva420p,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000",
-            str(output_dir / "step3_pad.webm")
+            str(output_dir / "step3_pad.webm"),
         )
         print(f"  Actual: {actual_w}x{actual_h}")
 
-        step3_pass = (actual_w == 512 and actual_h == 512)
+        step3_pass = actual_w == 512 and actual_h == 512
         print(f"  Status: {'✅ PASS' if step3_pass else '❌ FAIL'}")
 
-        results["steps"].append({
-            "name": "Pad",
-            "expected": (512, 512),
-            "actual": (actual_w, actual_h),
-            "pass": step3_pass
-        })
+        results["steps"].append(
+            {
+                "name": "Pad",
+                "expected": (512, 512),
+                "actual": (actual_w, actual_h),
+                "pass": step3_pass,
+            }
+        )
 
         if not step3_pass:
             results["overall_pass"] = False
@@ -320,19 +356,21 @@ def test_video_processing(input_file: str) -> dict:
             input_file,
             "scale=512:512:force_original_aspect_ratio=decrease,format=yuva420p,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000,fps=30",
             str(output_dir / "final.webm"),
-            full_pipeline=True
+            full_pipeline=True,
         )
         print(f"  Actual: {actual_w}x{actual_h}")
 
-        step4_pass = (actual_w == 512 and actual_h == 512)
+        step4_pass = actual_w == 512 and actual_h == 512
         print(f"  Status: {'✅ PASS' if step4_pass else '❌ FAIL'}")
 
-        results["steps"].append({
-            "name": "Final",
-            "expected": (512, 512),
-            "actual": (actual_w, actual_h),
-            "pass": step4_pass
-        })
+        results["steps"].append(
+            {
+                "name": "Final",
+                "expected": (512, 512),
+                "actual": (actual_w, actual_h),
+                "pass": step4_pass,
+            }
+        )
 
         if not step4_pass:
             results["overall_pass"] = False
@@ -343,7 +381,9 @@ def test_video_processing(input_file: str) -> dict:
 
     print()
     print("=" * 60)
-    print(f"Final result: {'✅ ALL TESTS PASSED' if results['overall_pass'] else '❌ SOME TESTS FAILED'}")
+    print(
+        f"Final result: {'✅ ALL TESTS PASSED' if results['overall_pass'] else '❌ SOME TESTS FAILED'}"
+    )
     print(f"Output files saved to: {output_dir}/")
     print()
 

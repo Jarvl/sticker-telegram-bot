@@ -64,7 +64,7 @@ A powerful Telegram bot that allows users to easily add images to configured sti
    pyenv local 3.11.4
    ```
 
-3. **Install FFmpeg:**
+3. **Install dependeny packages:**
    ```bash
    # On macOS
    brew install ffmpeg
@@ -74,6 +74,11 @@ A powerful Telegram bot that allows users to easily add images to configured sti
 
    # On Windows (using Chocolatey)
    choco install ffmpeg
+   ```
+
+   On ARM Macs, install libb2
+   ```bash
+   brew install libb2
    ```
 
 4. **Install dependencies with Poetry:**

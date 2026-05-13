@@ -16,6 +16,7 @@ from PIL import Image
 import io
 import emoji
 import subprocess
+import tempfile
 
 from sticker_telegram_bot.config import Config
 
@@ -48,9 +49,7 @@ class StickerBot:
             return None
         return update.message.from_user.id
 
-    async def _validate_user_id(
-        self, update: Update, user_id: Optional[int]
-    ) -> bool:
+    async def _validate_user_id(self, update: Update, user_id: Optional[int]) -> bool:
         """
         Validate user_id and send error message if invalid.
         Returns True if user_id is valid, False if invalid (caller should abort).
@@ -486,8 +485,10 @@ class StickerBot:
             # Get the file
             file = await context.bot.get_file(pending_data["file_id"])
 
-            # Log file info for debugging
-            logger.info(f"Downloading file: size={file.file_size} bytes, path={file.file_path}")
+            # Log Telegram file metadata before download
+            logger.info(
+                f"Downloading file: size={file.file_size} bytes, path={file.file_path}"
+            )
 
             # Download the media
             media_data = await file.download_as_bytearray()
@@ -549,7 +550,7 @@ class StickerBot:
             # Clean up pending sticker
             del self.pending_stickers[user_id]
 
-            # Log the exact message being sent for debugging
+            # Log the exact message being sent
             success_message = (
                 f"Thank you daddy 💕. Sticker added to "
                 f'<a href="https://t.me/addstickers/{sticker_set_name}">{selected_pack}</a>.\n\n'
@@ -615,7 +616,7 @@ class StickerBot:
             # Build video filter string
             filters = []
 
-            # Speed up video if longer than 3 seconds
+            # Telegram video stickers must be 3 seconds or shorter.
             if duration > 3.0:
                 speed_multiplier = duration / 3.0
                 logger.info(
@@ -638,46 +639,59 @@ class StickerBot:
             # Combine filters
             vf_string = ",".join(filters)
 
-            # Log input info for debugging
+            # Log input info before processing
             logger.info(
                 f"Processing video: size={len(video_data)} bytes, "
                 f"duration={duration}s, filters={vf_string}"
             )
 
-            # Build ffmpeg command with pipes
-            ffmpeg_cmd = [
-                "ffmpeg",
-                "-i", "pipe:0",  # Read from stdin
-                "-vf", vf_string,  # Apply video filters
-                "-c:v", "libvpx-vp9",  # VP9 codec
-                "-crf", "30",  # Quality (lower = better, 23-30 recommended)
-                "-b:v", "0",  # Use constant quality mode
-                "-deadline", "good",  # Encoding speed vs quality tradeoff
-                "-cpu-used", "4",  # Faster encoding (0-5, higher = faster)
-                "-an",  # No audio
-                "-f", "webm",  # Output format
-                "pipe:1"  # Write to stdout
-            ]
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as input_file:
+                input_file.write(video_data)
+                input_file.flush()
 
-            # Run ffmpeg with pipes (fully in-memory)
-            process = subprocess.Popen(
-                ffmpeg_cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
+                # Build ffmpeg command with seekable input and in-memory output.
+                ffmpeg_cmd = [
+                    "ffmpeg",
+                    "-i",
+                    input_file.name,  # MP4 files with tail moov atoms need seeking.
+                    "-vf",
+                    vf_string,  # Apply video filters
+                    "-c:v",
+                    "libvpx-vp9",  # VP9 codec
+                    "-crf",
+                    "30",  # Quality (lower = better, 23-30 recommended)
+                    "-b:v",
+                    "0",  # Use constant quality mode
+                    "-deadline",
+                    "good",  # Encoding speed vs quality tradeoff
+                    "-cpu-used",
+                    "4",  # Faster encoding (0-5, higher = faster)
+                    "-an",  # No audio
+                    "-f",
+                    "webm",  # Output format
+                    "pipe:1",  # Write to stdout
+                ]
 
-            # Send input data and get output
-            webm_data, stderr = process.communicate(input=video_data)
+                process = subprocess.Popen(
+                    ffmpeg_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+
+                webm_data, stderr = process.communicate()
+            stderr_text = stderr.decode("utf-8", errors="ignore")
 
             # Check for errors
             if process.returncode != 0:
-                error_msg = stderr.decode('utf-8', errors='ignore')
+                error_msg = stderr_text
                 logger.error(f"ffmpeg failed with return code {process.returncode}")
                 logger.error(f"Input data size: {len(video_data)} bytes")
 
                 # Check for common error patterns
-                if "partial file" in error_msg.lower() or "invalid data" in error_msg.lower():
+                if (
+                    "partial file" in error_msg.lower()
+                    or "invalid data" in error_msg.lower()
+                ):
                     raise RuntimeError(
                         f"Video file appears corrupted or incomplete. "
                         f"Try uploading the animation again. Error: {error_msg}"
