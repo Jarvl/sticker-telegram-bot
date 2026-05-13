@@ -13,11 +13,58 @@ import subprocess
 import sys
 import os
 import re
+import hashlib
+import json
+import time
 from pathlib import Path
 from typing import Tuple, Optional
 
 
 DOCKER_IMAGE = "linuxserver/ffmpeg:latest"
+
+
+# region agent log
+def agent_debug_log(hypothesis_id: str, location: str, message: str, data: dict):
+    payload = {
+        "sessionId": "f2b8d8",
+        "runId": "initial",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    try:
+        with open(
+            "/Users/andrew/Projects/sticker-telegram-bot/.cursor/debug-f2b8d8.log",
+            "a",
+            encoding="utf-8",
+        ) as debug_file:
+            debug_file.write(json.dumps(payload, default=str) + "\n")
+    except Exception:
+        pass
+
+
+def mp4_boxes(data: bytes, limit: int = 12):
+    boxes = []
+    offset = 0
+    data_len = len(data)
+    while offset + 8 <= data_len and len(boxes) < limit:
+        size = int.from_bytes(data[offset : offset + 4], "big")
+        box_type = data[offset + 4 : offset + 8].decode("latin-1", errors="replace")
+        header_size = 8
+        if size == 1 and offset + 16 <= data_len:
+            size = int.from_bytes(data[offset + 8 : offset + 16], "big")
+            header_size = 16
+        elif size == 0:
+            size = data_len - offset
+        if size < header_size:
+            boxes.append({"offset": offset, "type": box_type, "size": size, "invalid": True})
+            break
+        boxes.append({"offset": offset, "type": box_type, "size": size})
+        offset += size
+    return boxes
+# endregion
 
 
 def run_ffprobe(file_path: str) -> Tuple[int, int]:
@@ -129,11 +176,101 @@ def run_ffmpeg(input_file: str, filter_chain: str, output_file: str, full_pipeli
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        if full_pipeline:
+            agent_debug_log(
+                "H1",
+                "test_video_processing.py:run_ffmpeg:file_exit",
+                "file-mode ffmpeg exited",
+                {
+                    "input_file": input_file,
+                    "output_file": output_file,
+                    "returncode": result.returncode,
+                    "stderr_size": len(result.stderr),
+                    "filter_chain": filter_chain,
+                    "input_mode": "seekable_file",
+                },
+            )
         # Get dimensions of output file
         return run_ffprobe(output_file)
     except subprocess.CalledProcessError as e:
+        if full_pipeline:
+            agent_debug_log(
+                "H1",
+                "test_video_processing.py:run_ffmpeg:file_exit",
+                "file-mode ffmpeg failed",
+                {
+                    "input_file": input_file,
+                    "output_file": output_file,
+                    "returncode": e.returncode,
+                    "stderr_size": len(e.stderr),
+                    "stderr_tail": e.stderr[-2000:],
+                    "filter_chain": filter_chain,
+                    "input_mode": "seekable_file",
+                },
+            )
         print(f"Error running ffmpeg: {e.stderr}")
         raise
+
+
+def run_ffmpeg_pipe(input_file: str, filter_chain: str, full_pipeline: bool = False) -> dict:
+    """
+    Run ffmpeg with the same non-seekable stdin/stdout pattern used by the bot.
+    """
+    abs_input = os.path.abspath(input_file)
+    input_data = Path(abs_input).read_bytes()
+    agent_debug_log(
+        "H1,H2,H5",
+        "test_video_processing.py:run_ffmpeg_pipe:input",
+        "pipe-mode input prepared",
+        {
+            "input_file": input_file,
+            "input_size": len(input_data),
+            "sha256_16": hashlib.sha256(input_data).hexdigest()[:16],
+            "prefix_hex": input_data[:16].hex(),
+            "suffix_hex": input_data[-16:].hex(),
+            "mp4_boxes": mp4_boxes(input_data),
+            "filter_chain": filter_chain,
+            "full_pipeline": full_pipeline,
+        },
+    )
+
+    cmd = [
+        "docker", "run", "--rm", "-i",
+        DOCKER_IMAGE,
+        "-i", "pipe:0",
+        "-vf", filter_chain,
+        "-c:v", "libvpx-vp9",
+        "-crf", "30",
+        "-b:v", "0",
+    ]
+    if full_pipeline:
+        cmd.extend(["-deadline", "good", "-cpu-used", "4"])
+    cmd.extend(["-an", "-f", "webm", "pipe:1"])
+
+    result = subprocess.run(cmd, input=input_data, capture_output=True)
+    stderr_text = result.stderr.decode("utf-8", errors="ignore")
+    agent_debug_log(
+        "H1,H3,H4,H5",
+        "test_video_processing.py:run_ffmpeg_pipe:exit",
+        "pipe-mode ffmpeg exited",
+        {
+            "returncode": result.returncode,
+            "stdout_size": len(result.stdout),
+            "stderr_size": len(result.stderr),
+            "partial_file": "partial file" in stderr_text.lower(),
+            "invalid_data": "invalid data" in stderr_text.lower(),
+            "unspecified_pixel_format": "unspecified pixel format" in stderr_text.lower(),
+            "could_not_find_codec_parameters": (
+                "could not find codec parameters" in stderr_text.lower()
+            ),
+            "stderr_tail": stderr_text[-2000:],
+        },
+    )
+    return {
+        "returncode": result.returncode,
+        "stdout_size": len(result.stdout),
+        "stderr": stderr_text,
+    }
 
 
 def calculate_expected_scale(width: int, height: int) -> Tuple[int, int]:
@@ -198,6 +335,35 @@ def test_video_processing(input_file: str) -> dict:
 
     print(f"Testing video processing: {input_file}")
     print("=" * 60)
+    print()
+
+    # Step 0: Bot-style pipe input
+    print("Step 0: Bot-style pipe input")
+    print("  Input: pipe:0 / Output: pipe:1")
+    try:
+        pipe_result = run_ffmpeg_pipe(
+            input_file,
+            "setpts=PTS/2.1999999999999997,scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=black,fps=30",
+            full_pipeline=True,
+        )
+        pipe_pass = pipe_result["returncode"] == 0 and pipe_result["stdout_size"] > 0
+        print(f"  Return code: {pipe_result['returncode']}")
+        print(f"  Output bytes: {pipe_result['stdout_size']}")
+        print(f"  Status: {'✅ PASS' if pipe_pass else '❌ FAIL'}")
+        if not pipe_pass:
+            print(f"  Error tail: {pipe_result['stderr'][-1200:]}")
+            results["overall_pass"] = False
+        results["steps"].append({
+            "name": "Bot pipe",
+            "expected": "non-empty webm output",
+            "actual": (pipe_result["returncode"], pipe_result["stdout_size"]),
+            "pass": pipe_pass
+        })
+    except Exception as e:
+        print(f"  Error: {e}")
+        print("  Status: ❌ FAIL")
+        results["overall_pass"] = False
+
     print()
 
     # Get input dimensions

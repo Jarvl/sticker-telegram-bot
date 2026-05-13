@@ -1,5 +1,8 @@
 import logging
 import re
+import hashlib
+import json
+import time
 from typing import Dict, Optional
 from telegram import InputSticker, Update, InlineKeyboardButton, InlineKeyboardMarkup
 import telegram
@@ -16,6 +19,7 @@ from PIL import Image
 import io
 import emoji
 import subprocess
+import tempfile
 
 from sticker_telegram_bot.config import Config
 
@@ -24,6 +28,50 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+
+# region agent log
+def _agent_debug_log(hypothesis_id: str, location: str, message: str, data: Dict):
+    payload = {
+        "sessionId": "f2b8d8",
+        "runId": "initial",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    try:
+        with open(
+            "/Users/andrew/Projects/sticker-telegram-bot/.cursor/debug-f2b8d8.log",
+            "a",
+            encoding="utf-8",
+        ) as debug_file:
+            debug_file.write(json.dumps(payload, default=str) + "\n")
+    except Exception:
+        pass
+# endregion
+
+
+def _agent_mp4_boxes(data: bytes, limit: int = 12):
+    boxes = []
+    offset = 0
+    data_len = len(data)
+    while offset + 8 <= data_len and len(boxes) < limit:
+        size = int.from_bytes(data[offset : offset + 4], "big")
+        box_type = data[offset + 4 : offset + 8].decode("latin-1", errors="replace")
+        header_size = 8
+        if size == 1 and offset + 16 <= data_len:
+            size = int.from_bytes(data[offset + 8 : offset + 16], "big")
+            header_size = 16
+        elif size == 0:
+            size = data_len - offset
+        if size < header_size:
+            boxes.append({"offset": offset, "type": box_type, "size": size, "invalid": True})
+            break
+        boxes.append({"offset": offset, "type": box_type, "size": size})
+        offset += size
+    return boxes
 
 
 class StickerBot:
@@ -492,6 +540,25 @@ class StickerBot:
             # Download the media
             media_data = await file.download_as_bytearray()
 
+            # region agent log
+            _agent_debug_log(
+                "H2",
+                "sticker_telegram_bot/bot.py:494",
+                "telegram download completed",
+                {
+                    "expected_file_size": file.file_size,
+                    "actual_download_size": len(media_data) if media_data else 0,
+                    "media_type": pending_data.get("media_type", "static"),
+                    "duration": pending_data.get("duration", 0),
+                    "sha256_16": hashlib.sha256(bytes(media_data)).hexdigest()[:16]
+                    if media_data
+                    else None,
+                    "prefix_hex": bytes(media_data[:16]).hex() if media_data else None,
+                    "suffix_hex": bytes(media_data[-16:]).hex() if media_data else None,
+                },
+            )
+            # endregion
+
             # Validate download completed successfully
             if not media_data or len(media_data) == 0:
                 raise ValueError("Downloaded file is empty")
@@ -643,36 +710,94 @@ class StickerBot:
                 f"Processing video: size={len(video_data)} bytes, "
                 f"duration={duration}s, filters={vf_string}"
             )
-
-            # Build ffmpeg command with pipes
-            ffmpeg_cmd = [
-                "ffmpeg",
-                "-i", "pipe:0",  # Read from stdin
-                "-vf", vf_string,  # Apply video filters
-                "-c:v", "libvpx-vp9",  # VP9 codec
-                "-crf", "30",  # Quality (lower = better, 23-30 recommended)
-                "-b:v", "0",  # Use constant quality mode
-                "-deadline", "good",  # Encoding speed vs quality tradeoff
-                "-cpu-used", "4",  # Faster encoding (0-5, higher = faster)
-                "-an",  # No audio
-                "-f", "webm",  # Output format
-                "pipe:1"  # Write to stdout
-            ]
-
-            # Run ffmpeg with pipes (fully in-memory)
-            process = subprocess.Popen(
-                ffmpeg_cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
+            # region agent log
+            _agent_debug_log(
+                "H1,H2,H5",
+                "sticker_telegram_bot/bot.py:663",
+                "ffmpeg input bytes prepared",
+                {
+                    "input_size": len(video_data),
+                    "duration": duration,
+                    "filters": vf_string,
+                    "sha256_16": hashlib.sha256(video_data).hexdigest()[:16],
+                    "prefix_hex": video_data[:16].hex(),
+                    "suffix_hex": video_data[-16:].hex(),
+                    "mp4_boxes": _agent_mp4_boxes(video_data),
+                },
             )
+            # endregion
 
-            # Send input data and get output
-            webm_data, stderr = process.communicate(input=video_data)
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as input_file:
+                input_file.write(video_data)
+                input_file.flush()
+
+                # region agent log
+                _agent_debug_log(
+                    "H1",
+                    "sticker_telegram_bot/bot.py:734",
+                    "ffmpeg seekable input prepared",
+                    {
+                        "input_size": len(video_data),
+                        "input_mode": "seekable_temp_file",
+                    },
+                )
+                # endregion
+
+                # Build ffmpeg command with seekable input and in-memory output.
+                ffmpeg_cmd = [
+                    "ffmpeg",
+                    "-i",
+                    input_file.name,  # MP4 files with tail moov atoms need seeking.
+                    "-vf",
+                    vf_string,  # Apply video filters
+                    "-c:v",
+                    "libvpx-vp9",  # VP9 codec
+                    "-crf",
+                    "30",  # Quality (lower = better, 23-30 recommended)
+                    "-b:v",
+                    "0",  # Use constant quality mode
+                    "-deadline",
+                    "good",  # Encoding speed vs quality tradeoff
+                    "-cpu-used",
+                    "4",  # Faster encoding (0-5, higher = faster)
+                    "-an",  # No audio
+                    "-f",
+                    "webm",  # Output format
+                    "pipe:1",  # Write to stdout
+                ]
+
+                process = subprocess.Popen(
+                    ffmpeg_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+
+                webm_data, stderr = process.communicate()
+            stderr_text = stderr.decode("utf-8", errors="ignore")
+            # region agent log
+            _agent_debug_log(
+                "H1,H3,H4,H5",
+                "sticker_telegram_bot/bot.py:695",
+                "ffmpeg process exited",
+                {
+                    "returncode": process.returncode,
+                    "stdout_size": len(webm_data),
+                    "stderr_size": len(stderr),
+                    "partial_file": "partial file" in stderr_text.lower(),
+                    "invalid_data": "invalid data" in stderr_text.lower(),
+                    "unspecified_pixel_format": "unspecified pixel format"
+                    in stderr_text.lower(),
+                    "could_not_find_codec_parameters": (
+                        "could not find codec parameters" in stderr_text.lower()
+                    ),
+                    "stderr_tail": stderr_text[-2000:],
+                },
+            )
+            # endregion
 
             # Check for errors
             if process.returncode != 0:
-                error_msg = stderr.decode('utf-8', errors='ignore')
+                error_msg = stderr_text
                 logger.error(f"ffmpeg failed with return code {process.returncode}")
                 logger.error(f"Input data size: {len(video_data)} bytes")
 
