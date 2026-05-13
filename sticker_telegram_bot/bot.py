@@ -1,7 +1,14 @@
 import logging
 import re
-from typing import Dict, Optional
-from telegram import InputSticker, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from typing import Dict, Optional, Tuple
+
+from telegram import (
+    InputSticker,
+    Sticker,
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 import telegram
 from telegram.ext import (
     Application,
@@ -130,6 +137,53 @@ class StickerBot:
 
         return file_id, duration, None
 
+    def _classify_telegram_sticker(
+        self, sticker: Sticker
+    ) -> Tuple[Optional[Dict], Optional[str]]:
+        """
+        Map a Telegram Sticker object to our pending-sticker pipeline.
+
+        Returns (info_dict, None) on success, or (None, error_message).
+        info_dict keys: file_id, media_type ('static'|'video'), duration, suggested_emoji
+        """
+        if sticker.is_video:
+            duration = 0.0
+            return (
+                {
+                    "file_id": sticker.file_id,
+                    "media_type": "video",
+                    "duration": duration,
+                    "suggested_emoji": sticker.emoji,
+                },
+                None,
+            )
+
+        if sticker.is_animated:
+            return (
+                None,
+                "❌ Animated Telegram stickers (TGS/Lottie) are not supported yet. "
+                "Try a static sticker, a video sticker, a photo, or a GIF.",
+            )
+
+        return (
+            {
+                "file_id": sticker.file_id,
+                "media_type": "static",
+                "duration": None,
+                "suggested_emoji": sticker.emoji,
+            },
+            None,
+        )
+
+    @staticmethod
+    def _suggested_emoji_hint(suggested_emoji: Optional[str]) -> str:
+        if suggested_emoji and emoji.is_emoji(suggested_emoji.strip()):
+            return (
+                f"\n\n💡 The source sticker is associated with {suggested_emoji.strip()} "
+                "if you want to reuse it."
+            )
+        return ""
+
     async def _store_pending_sticker(
         self,
         update: Update,
@@ -137,6 +191,7 @@ class StickerBot:
         media_message_id: int,
         media_type: str,
         duration: Optional[float] = None,
+        suggested_emoji: Optional[str] = None,
     ) -> bool:
         """Store pending sticker data. Returns True if successful, False otherwise."""
         # Get and validate user ID
@@ -157,10 +212,17 @@ class StickerBot:
         if duration is not None:
             self.pending_stickers[user_id]["duration"] = duration
 
+        if suggested_emoji:
+            self.pending_stickers[user_id]["suggested_emoji"] = suggested_emoji
+
         return True
 
     async def _setup_pending_image_sticker(
-        self, update: Update, file_id: Optional[str], image_message_id: int
+        self,
+        update: Update,
+        file_id: Optional[str],
+        image_message_id: int,
+        suggested_emoji: Optional[str] = None,
     ):
         """Set up pending image sticker and prompt for emoji."""
         if update.message is None or file_id is None:
@@ -168,13 +230,18 @@ class StickerBot:
 
         # Store pending sticker (validates user_id internally)
         if not await self._store_pending_sticker(
-            update, file_id, image_message_id, media_type="static"
+            update,
+            file_id,
+            image_message_id,
+            media_type="static",
+            suggested_emoji=suggested_emoji,
         ):
             return False
 
         # Prompt for emoji
+        hint = self._suggested_emoji_hint(suggested_emoji)
         await update.message.reply_text(
-            f"📸 {self.EMOJI_PROMPT_BASE}",
+            f"📸 {self.EMOJI_PROMPT_BASE}{hint}",
             reply_to_message_id=update.message.message_id,
         )
         return True
@@ -185,6 +252,7 @@ class StickerBot:
         file_id: Optional[str],
         animation_message_id: int,
         duration: float,
+        suggested_emoji: Optional[str] = None,
     ):
         """Set up pending animation sticker and prompt for emoji."""
         if update.message is None or file_id is None:
@@ -192,13 +260,19 @@ class StickerBot:
 
         # Store pending sticker (validates user_id internally)
         if not await self._store_pending_sticker(
-            update, file_id, animation_message_id, media_type="video", duration=duration
+            update,
+            file_id,
+            animation_message_id,
+            media_type="video",
+            duration=duration,
+            suggested_emoji=suggested_emoji,
         ):
             return False
 
         # Prompt for emoji
+        hint = self._suggested_emoji_hint(suggested_emoji)
         await update.message.reply_text(
-            f"🎬 {self.EMOJI_PROMPT_BASE}",
+            f"🎬 {self.EMOJI_PROMPT_BASE}{hint}",
             reply_to_message_id=update.message.message_id,
         )
         return True
@@ -234,6 +308,9 @@ class StickerBot:
             MessageHandler(filters.ANIMATION, self.handle_direct_animation)
         )
         self.application.add_handler(
+            MessageHandler(filters.Sticker.ALL, self.handle_direct_sticker)
+        )
+        self.application.add_handler(
             CallbackQueryHandler(
                 self.handle_sticker_pack_selection,
                 pattern=rf"^{re.escape(self.PACK_PREFIX)}",
@@ -249,12 +326,14 @@ class StickerBot:
 
         welcome_message = (
             "🐐 Hello friends.\n\n"
-            "To add an image to a sticker pack:\n"
-            "1. Reply to an image with the command '/sticker'\n"
+            "To add media to a sticker pack:\n"
+            "1. Reply to an image, GIF, or Telegram sticker (static or video) with "
+            "the command '/sticker'\n"
             "2. Send an emoji for the sticker\n"
             "3. Select which sticker pack to add it to\n"
             "4. The sticker will be added to your chosen pack\n\n"
-            "💡 You can also send an image directly to me (if you're in an allowed chat).\n"
+            "💡 You can also send an image, GIF, or sticker directly to me "
+            "(if you're in an allowed chat).\n"
             "❌ Use '/cancel' to clear any pending sticker submissions."
         )
         await update.message.reply_text(welcome_message)
@@ -287,14 +366,15 @@ class StickerBot:
     async def handle_sticker_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ):
-        """Handle '/sticker' command when replied to an image or animation."""
+        """Handle '/sticker' when replying to an image, GIF, or Telegram sticker."""
         if update.message is None or not self.is_chat_allowed(update.message.chat_id):
             return
 
         # Check if this is a reply to another message
         if not update.message.reply_to_message:
             await update.message.reply_text(
-                "❌ Please reply to an image or animation with the /sticker command.",
+                "❌ Please reply to an image, GIF, or sticker (static or video) with "
+                "the /sticker command.",
                 reply_to_message_id=update.message.message_id,
             )
             return
@@ -317,6 +397,32 @@ class StickerBot:
             await self._setup_pending_animation_sticker(
                 update, file_id, replied_message.message_id, duration
             )
+        elif replied_message.sticker:
+            info, sticker_error = self._classify_telegram_sticker(
+                replied_message.sticker
+            )
+            if sticker_error:
+                await update.message.reply_text(
+                    sticker_error,
+                    reply_to_message_id=update.message.message_id,
+                )
+                return
+            assert info is not None
+            if info["media_type"] == "video":
+                await self._setup_pending_animation_sticker(
+                    update,
+                    info["file_id"],
+                    replied_message.message_id,
+                    float(info["duration"]),
+                    suggested_emoji=info.get("suggested_emoji"),
+                )
+            else:
+                await self._setup_pending_image_sticker(
+                    update,
+                    info["file_id"],
+                    replied_message.message_id,
+                    suggested_emoji=info.get("suggested_emoji"),
+                )
         else:
             # Process as image
             file_id, error_message = await self._process_image_message(replied_message)
@@ -378,7 +484,8 @@ class StickerBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(
-            f"📦 Choose a sticker pack to add this image with emoji {emoji_text}:\n\n❌ Use '/cancel' to cancel this request.",
+            f"📦 Choose a sticker pack to add this sticker with emoji {emoji_text}:\n\n"
+            "❌ Use '/cancel' to cancel this request.",
             reply_markup=reply_markup,
             reply_to_message_id=update.message.message_id,
         )
@@ -424,6 +531,43 @@ class StickerBot:
         await self._setup_pending_animation_sticker(
             update, file_id, update.message.message_id, duration
         )
+
+    async def handle_direct_sticker(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Handle direct messages containing Telegram stickers from allowed users."""
+        if update.message is None or not self.is_direct_message_allowed(
+            update.message.chat_id
+        ):
+            return
+
+        if update.message.sticker is None:
+            return
+
+        info, sticker_error = self._classify_telegram_sticker(update.message.sticker)
+        if sticker_error:
+            await update.message.reply_text(
+                sticker_error,
+                reply_to_message_id=update.message.message_id,
+            )
+            return
+
+        assert info is not None
+        if info["media_type"] == "video":
+            await self._setup_pending_animation_sticker(
+                update,
+                info["file_id"],
+                update.message.message_id,
+                float(info["duration"]),
+                suggested_emoji=info.get("suggested_emoji"),
+            )
+        else:
+            await self._setup_pending_image_sticker(
+                update,
+                info["file_id"],
+                update.message.message_id,
+                suggested_emoji=info.get("suggested_emoji"),
+            )
 
     async def handle_sticker_pack_selection(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -645,7 +789,8 @@ class StickerBot:
                 f"duration={duration}s, filters={vf_string}"
             )
 
-            with tempfile.NamedTemporaryFile(suffix=".mp4") as input_file:
+            # Neutral suffix so WEBM (video stickers) and MP4 (GIF animations) probe correctly.
+            with tempfile.NamedTemporaryFile(suffix=".bin") as input_file:
                 input_file.write(video_data)
                 input_file.flush()
 
@@ -653,7 +798,7 @@ class StickerBot:
                 ffmpeg_cmd = [
                     "ffmpeg",
                     "-i",
-                    input_file.name,  # MP4 files with tail moov atoms need seeking.
+                    input_file.name,
                     "-vf",
                     vf_string,  # Apply video filters
                     "-c:v",

@@ -5,7 +5,7 @@ A powerful Telegram bot that allows users to easily add images to configured sti
 ## Features
 
 - ✅ **Group Chat Support**: Works in both private chats and group conversations
-- ✅ **Image to Sticker Conversion**: Reply to any image with "sticker" to add it to a pack
+- ✅ **Image to Sticker Conversion**: Reply to an image, GIF, or Telegram sticker (static or video) with "sticker" to add it to a pack
 - ✅ **Animated Sticker Support**: Convert GIFs to animated stickers (WEBM VP9 format)
 - ✅ **Multiple Sticker Packs**: Configure multiple sticker packs via environment variables
 - ✅ **Media Processing**: Automatically processes images and animations to meet Telegram's sticker requirements
@@ -142,17 +142,19 @@ make lint          # Run flake8 linter
 ### Using the Bot
 
 1. **Add the bot to a group or start a private chat**
-2. **Send an image or GIF to the chat**
-3. **Reply to the image/GIF with the command `sticker`** (or send directly in allowed chats)
+2. **Send an image, GIF, or Telegram sticker (static or video) to the chat**
+3. **Reply with the command `sticker`** (or send the media directly in allowed chats)
 4. **Send an emoji for the sticker** (e.g., 🗿, 🔫, 💩)
 5. **Select which sticker pack to add it to**
 6. **The media will be processed and added to your chosen pack**
+
+Animated Telegram stickers (TGS/Lottie) are not supported as input; use a static or video sticker, a photo, or a GIF.
 
 ### Bot Commands
 
 - `/start` - Welcome message and basic instructions
 - `/help` - Detailed help and available sticker packs
-- `/sticker` - Reply to an image or GIF to add it to a sticker pack
+- `/sticker` - Reply to an image, GIF, or Telegram sticker (static or video) to add it to a pack
 - `/cancel` - Cancel any pending sticker request
 
 ### Animated Sticker Notes

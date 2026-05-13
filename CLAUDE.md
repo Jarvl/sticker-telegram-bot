@@ -65,9 +65,10 @@ make clean                  # Clean Python cache and logs
 
 ### Bot Workflow
 
-1. **Media Submission Flow** (Images and Animations):
-   - User replies to an image/GIF with `/sticker` command OR sends direct media (if allowed chat)
-   - Bot extracts file_id (and duration for animations) and stores in `pending_stickers` dict keyed by user_id
+1. **Media Submission Flow** (Images, animations, and Telegram stickers):
+   - User replies to an image/GIF/Telegram sticker with `/sticker` OR sends direct media (if allowed chat). Telegram sticker messages use `message.sticker` (static WEBP or video WEBM); animated TGS stickers are rejected with a clear message.
+   - Bot extracts `file_id` (and duration for GIF animations; video stickers use duration `0` unless extended later) and stores in `pending_stickers` dict keyed by user_id
+   - Optional `suggested_emoji` from the source sticker is stored for UX hints
    - Bot prompts user for emoji (📸 for images, 🎬 for animations)
    - User sends emoji response (validated with `emoji.is_emoji()`)
    - Bot presents inline keyboard with available sticker packs
@@ -89,8 +90,9 @@ make clean                  # Clean Python cache and logs
          "user_message_id": int,
          "waiting_for_emoji": bool,
          "media_type": str,  # "static" or "video"
-         "duration": float,  # optional, for animations only
-         "emoji": str  # added after emoji response
+         "duration": float,  # optional, for animations / video pipeline
+         "emoji": str,  # added after emoji response
+         "suggested_emoji": str  # optional, hint from source Telegram sticker
        }
      }
      ```
@@ -107,7 +109,7 @@ make clean                  # Clean Python cache and logs
 4. **Access Control**:
    - `is_chat_allowed()`: Checks if chat_id is in ALLOWED_CHAT_IDS (or allows all if None)
    - `is_direct_message_allowed()`: Additionally checks chat_id > 0 (positive = DM, negative = group)
-   - Direct image handling only works in allowed DMs
+   - Direct media handling only works in allowed DMs (`filters.PHOTO | filters.Document.IMAGE`, `filters.ANIMATION`, `filters.Sticker.ALL`)
 
 5. **Callback Data Format**:
    - Pack selection buttons use format: `pack_{pack_name}|{user_id}`
