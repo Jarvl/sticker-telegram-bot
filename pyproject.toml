@@ -13,14 +13,14 @@ packages = [{include = "sticker_telegram_bot"}]
 [tool.poetry.dependencies]
 python = "^3.11"
 python-telegram-bot = "^22.2"
-pillow = "^11.3.0"
+pillow = "^12.2.0"
 pydantic = "^2.11.7"
-python-dotenv = "^1.1.1"
+python-dotenv = "^1.2.2"
 emoji = "^2.14.1"
 
 
 [tool.poetry.group.dev.dependencies]
-black = "^25.1.0"
+black = "^26.3.0"
 flake8 = "^7.3.0"
 
 [build-system]

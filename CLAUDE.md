@@ -54,7 +54,7 @@ make clean                  # Clean Python cache and logs
 
 **sticker_telegram_bot/bot.py**
 - Main `StickerBot` class containing all bot logic
-- Uses python-telegram-bot v22.2 with async/await patterns
+- Uses python-telegram-bot v22.7 with async/await patterns
 - Global singleton instance: `bot = StickerBot()`
 - Handlers registered in `start()` method, then run via `run_polling()` or `run_webhook()`
 
@@ -124,8 +124,7 @@ make clean                  # Clean Python cache and logs
 - Output as PNG bytes
 
 **Animations** are processed in `process_video_for_sticker()`:
-- Uses ffmpeg directly via subprocess with pipes (fully in-memory processing)
-- No temporary files created - uses stdin/stdout pipes
+- Uses ffmpeg directly via subprocess; seekable input via a short-lived temp file, WEBM output on stdout
 - Conversion specs:
   - Codec: VP9 (libvpx-vp9)
   - Resolution: 512px on longest side with even dimensions via scale filter
@@ -133,7 +132,7 @@ make clean                  # Clean Python cache and logs
   - Audio: stripped with `-an`
   - Duration: if >3s, speeds up video using setpts filter
   - Quality: CRF 30 with constant quality mode
-- Filter chain: `setpts,scale,fps` combined with `,`.join()
+- Filter chain: `setpts` (optional), `scale`, `pad`, `fps` combined with `,`.join()
 - File size validation: rejects if >256KB
 - Error handling via process.returncode and stderr
 
@@ -169,11 +168,11 @@ Optional environment variables:
 
 ## Key Dependencies
 
-- `python-telegram-bot` (v22.2): Async Telegram bot framework
-- `pillow` (v11.3): Image processing
-- `pydantic` (v2.11): Used for config validation patterns
-- `emoji` (v2.14): Emoji validation
-- `python-dotenv` (v1.1): Environment variable loading
+- `python-telegram-bot` (v22.7): Async Telegram bot framework
+- `pillow` (v12.2): Image processing
+- `pydantic` (v2.13): Declared in dependencies; config uses manual validation in `config.py`
+- `emoji` (v2.15): Emoji validation
+- `python-dotenv` (v1.2): Environment variable loading
 - System `ffmpeg`: Video processing via subprocess pipes (no Python wrapper)
 
 ## Notes for Development
@@ -184,4 +183,4 @@ Optional environment variables:
 - HTML formatting is used in success messages with fallback to plain text if parsing fails
 - Logging is configured at INFO level with timestamp, name, level, and message format
 - FFmpeg must be installed on the system for animated sticker support (installed in Dockerfile)
-- Video processing is fully in-memory using subprocess pipes (no temporary files)
+- Video processing uses ffmpeg subprocess with a temp input file and stdout for WEBM output
