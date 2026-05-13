@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 from typing import Dict, Optional
 from telegram import InputSticker, Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -645,15 +646,28 @@ class StickerBot:
                 f"duration={duration}s, filters={vf_string}"
             )
 
-            with tempfile.NamedTemporaryFile(suffix=".mp4") as input_file:
-                input_file.write(video_data)
-                input_file.flush()
+            input_fd = None
+            input_file = None
+            pass_fds = ()
+            try:
+                if hasattr(os, "memfd_create") and os.path.exists("/proc/self/fd"):
+                    input_fd = os.memfd_create("sticker-video-input")
+                    with os.fdopen(os.dup(input_fd), "wb") as memfd_file:
+                        memfd_file.write(video_data)
+                    os.lseek(input_fd, 0, os.SEEK_SET)
+                    input_path = f"/proc/self/fd/{input_fd}"
+                    pass_fds = (input_fd,)
+                else:
+                    input_file = tempfile.NamedTemporaryFile(suffix=".mp4")
+                    input_file.write(video_data)
+                    input_file.flush()
+                    input_path = input_file.name
 
                 # Build ffmpeg command with seekable input and in-memory output.
                 ffmpeg_cmd = [
                     "ffmpeg",
                     "-i",
-                    input_file.name,  # MP4 files with tail moov atoms need seeking.
+                    input_path,  # MP4 files with tail moov atoms need seeking.
                     "-vf",
                     vf_string,  # Apply video filters
                     "-c:v",
@@ -672,13 +686,20 @@ class StickerBot:
                     "pipe:1",  # Write to stdout
                 ]
 
-                process = subprocess.Popen(
-                    ffmpeg_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
+                process_kwargs = {
+                    "stdout": subprocess.PIPE,
+                    "stderr": subprocess.PIPE,
+                }
+                if pass_fds:
+                    process_kwargs["pass_fds"] = pass_fds
 
+                process = subprocess.Popen(ffmpeg_cmd, **process_kwargs)
                 webm_data, stderr = process.communicate()
+            finally:
+                if input_file is not None:
+                    input_file.close()
+                if input_fd is not None:
+                    os.close(input_fd)
             stderr_text = stderr.decode("utf-8", errors="ignore")
 
             # Check for errors
