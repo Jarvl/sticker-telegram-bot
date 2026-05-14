@@ -167,12 +167,6 @@ Optional environment variables:
 - Managed with Poetry for dependencies
 
 ## Key Dependencies
-
-- `python-telegram-bot` (v22.7): Async Telegram bot framework
-- `pillow` (v12.2): Image processing
-- `pydantic` (v2.13): Declared in dependencies; config uses manual validation in `config.py`
-- `emoji` (v2.15): Emoji validation
-- `python-dotenv` (v1.2): Environment variable loading
 - System `ffmpeg`: Video processing via subprocess pipes (no Python wrapper)
 
 ## Notes for Development
