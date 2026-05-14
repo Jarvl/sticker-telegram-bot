@@ -12,10 +12,8 @@ Usage:
 import subprocess
 import sys
 import os
-import re
 from pathlib import Path
-from typing import Tuple, Optional
-
+from typing import Tuple
 
 DOCKER_IMAGE = "linuxserver/ffmpeg:latest"
 

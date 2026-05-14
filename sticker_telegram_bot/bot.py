@@ -911,7 +911,8 @@ class StickerBot:
             raise ValueError("WEBHOOK_URL must be set for webhook mode")
         if self.application.bot is None:
             raise RuntimeError("Bot is not initialized.")
-        self.application.bot.set_webhook(url=Config.WEBHOOK_URL)
+        # run_webhook registers the webhook with Telegram; Bot.set_webhook is async
+        # and must not be called without awaiting.
         self.application.run_webhook(
             listen=Config.API_HOST, port=Config.API_PORT, webhook_url=Config.WEBHOOK_URL
         )
