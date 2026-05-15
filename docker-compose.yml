@@ -20,7 +20,7 @@ services:
       - .:/app
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18
     container_name: telegram-sticker-bot-postgres
     environment:
       - POSTGRES_USER=sticker_bot
@@ -32,7 +32,7 @@ services:
       timeout: 5s
       retries: 20
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-db-data:/var/lib/postgresql
 
 volumes:
-  postgres-data:
+  postgres-db-data:
