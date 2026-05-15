@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A Telegram bot that allows users to add images to configured sticker packs by replying to images with the "sticker" command. The bot supports both polling and webhook modes and can operate in both private chats and group conversations.
+A Telegram bot that allows group chats to curate sticker packs by replying to media with the `/sticker` command. The bot supports both polling and webhook modes.
 
 ## Development Commands
 
@@ -13,6 +13,7 @@ A Telegram bot that allows users to add images to configured sticker packs by re
 poetry install              # Install dependencies
 make setup                  # Initial setup with pyenv check
 make check-config           # Validate configuration only
+make migrate                # Run database migrations
 ```
 
 ### Running the Bot
@@ -50,13 +51,18 @@ make clean                  # Clean Python cache and logs
 - Centralized configuration using environment variables
 - Uses pydantic-like validation with `Config.validate()` class method
 - All config is loaded from `.env` file via python-dotenv
-- Supports optional `ALLOWED_CHAT_IDS` for restricting bot access to specific chats/users
+- Requires `DATABASE_URL` for Postgres-backed group sticker pack records
 
 **sticker_telegram_bot/bot.py**
 - Main `StickerBot` class containing all bot logic
 - Uses python-telegram-bot v22.7 with async/await patterns
 - Global singleton instance: `bot = StickerBot()`
-- Handlers registered in `start()` method, then run via `run_polling()` or `run_webhook()`
+- `/manage` and `/sticker` are registered through a `ConversationHandler` with `concurrent_updates(False)`
+
+**sticker_telegram_bot/db/**
+- SQLAlchemy 2.x async ORM models, session setup, and repository methods
+- `sticker_packs` stores bot-created group packs with denormalized `chat_id` and `is_visible`
+- Sticker pack records are unique per `(telegram_name, chat_id)` so the same bot-managed pack can be imported into multiple groups
 
 **sticker_telegram_bot/main.py**
 - Entry point that validates config and starts bot in appropriate mode
@@ -66,39 +72,22 @@ make clean                  # Clean Python cache and logs
 ### Bot Workflow
 
 1. **Media Submission Flow** (Images, animations, and Telegram stickers):
-   - User replies to an image/GIF/Telegram sticker with `/sticker` OR sends direct media (if allowed chat). Telegram sticker messages use `message.sticker` (static WEBP or video WEBM); animated TGS stickers are rejected with a clear message.
-   - Bot extracts `file_id` (and duration for GIF animations; video stickers use duration `0` unless extended later) and stores in `pending_stickers` dict keyed by user_id
+   - User replies to an image/GIF/Telegram sticker with `/sticker` in a group chat. Telegram sticker messages use `message.sticker` (static WEBP or video WEBM); animated TGS stickers are rejected with a clear message.
+   - Bot extracts `file_id` (and duration for GIF animations; video stickers use duration `0` unless extended later) and stores transient flow data in `context.user_data` scoped by chat
    - Optional `suggested_emoji` from the source sticker is stored for UX hints
    - Bot prompts user for emoji (📸 for images, 🎬 for animations)
    - User sends emoji response (validated with `emoji.is_emoji()`)
-   - Bot presents inline keyboard with available sticker packs
-   - User selects pack via callback query
+   - Bot presents inline keyboard with visible group sticker packs plus a create-pack option
+   - User selects pack via callback query, or creates a new pack using the pending sticker as the first sticker
    - Bot processes media:
      - **Images**: resize to 512x512, RGBA, centered on transparent canvas
      - **Animations**: convert to WEBM VP9 (see Video Processing below)
-   - Bot adds sticker to pack with appropriate format ("static" or "video")
-   - Creates pack if it doesn't exist
+   - Bot adds sticker to the selected bot-created group pack with appropriate sticker format ("static" or "video")
 
 2. **State Management**:
-   - `pending_stickers` dict tracks user submissions with structure:
-     ```python
-     {
-       user_id: {
-         "message_id": int,
-         "file_id": str,
-         "chat_id": int,
-         "user_message_id": int,
-         "waiting_for_emoji": bool,
-         "media_type": str,  # "static" or "video"
-         "duration": float,  # optional, for animations / video pipeline
-         "emoji": str,  # added after emoji response
-         "suggested_emoji": str  # optional, hint from source Telegram sticker
-       }
-     }
-     ```
-   - Use `/cancel` command to clear pending state
-   - Common logic extracted to `_store_pending_sticker()` helper
-   - Separate setup methods: `_setup_pending_image_sticker()` and `_setup_pending_animation_sticker()`
+   - `ConversationHandler(per_chat=True, per_user=True)` manages `/manage` and `/sticker`
+   - Transient state is stored in `context.user_data["chat_flows"][chat_id]`
+   - Use `/cancel` command to clear pending state and end the conversation
 
 3. **Animation Detection**:
    - Telegram auto-converts GIFs to MP4 animations (`message.animation`)
@@ -106,14 +95,15 @@ make clean                  # Clean Python cache and logs
    - Animations handled separately from images with dedicated handler
    - Duration extracted from animation metadata for processing
 
-4. **Access Control**:
-   - `is_chat_allowed()`: Checks if chat_id is in ALLOWED_CHAT_IDS (or allows all if None)
-   - `is_direct_message_allowed()`: Additionally checks chat_id > 0 (positive = DM, negative = group)
-   - Direct media handling only works in allowed DMs (`filters.PHOTO | filters.Document.IMAGE`, `filters.ANIMATION`, `filters.Sticker.ALL`)
+4. **Group Pack Management**:
+   - `/manage` shows inline buttons for listing packs, creating a new empty pack, and importing an existing bot-managed pack from one of its stickers
+   - Pack detail views include Show/Hide toggle and Back navigation
+   - Empty pack creation uses a generated white placeholder sticker, records the pack after Telegram claims the name, then removes the placeholder best-effort
+   - Imported pack names are read from `message.sticker.set_name`, must end with `_by_<bot username>`, and are stored as visible for the importing group
 
 5. **Callback Data Format**:
-   - Pack selection buttons use format: `pack_{pack_name}|{user_id}`
-   - Validated in `handle_sticker_pack_selection()` to prevent unauthorized access
+   - Manage callbacks use compact forms like `mg:home`, `mg:list`, `mg:pack:{id}`, `mg:toggle:{id}`, `mg:create`, `mg:import`
+   - Sticker callbacks use compact forms like `st:add:{id}` and `st:create`
 
 ### Media Processing
 
@@ -138,9 +128,9 @@ make clean                  # Clean Python cache and logs
 
 ### Sticker Pack Naming
 
-Sticker set names generated by `make_sticker_set_name()`:
+Sticker set names generated by `_make_group_sticker_set_name()`:
 - Sanitizes title (removes special chars, collapses spaces to underscores)
-- Format: `{cleaned_title}_by_{bot_username}`
+- Format: `{cleaned_title}_{abs_chat_id}_by_{bot_username}`
 - Must start with a letter per Telegram requirements
 
 ## Configuration
@@ -148,17 +138,15 @@ Sticker set names generated by `make_sticker_set_name()`:
 Required environment variables:
 - `TELEGRAM_BOT_TOKEN`: Bot token from @BotFather
 - `TELEGRAM_BOT_USERNAME`: Bot username (without @)
-- `STICKER_PACKS`: Comma-separated list of pack names
-- `STICKER_PACK_OWNER_USER_ID`: Integer user ID that owns sticker packs
+- `DATABASE_URL`: Postgres connection string using `postgresql+psycopg://`
 
 Optional environment variables:
-- `ALLOWED_CHAT_IDS`: Comma-separated list of chat IDs (empty = allow all)
 - `MODE`: "polling" or "webhook" (default: polling)
 - `API_HOST`: Host for API server (default: 0.0.0.0)
 - `API_PORT`: Port for API server (default: 8000)
 - `WEBHOOK_URL`: Required if MODE=webhook
 
-**Important**: When using Kubernetes secrets, ensure no extra whitespace/newlines in integer values to avoid `ValueError: invalid literal for int()` errors.
+**Important**: Run Alembic migrations before starting the bot in a fresh database.
 
 ## Python Version
 
@@ -168,6 +156,7 @@ Optional environment variables:
 
 ## Key Dependencies
 - System `ffmpeg`: Video processing via subprocess pipes (no Python wrapper)
+- PostgreSQL plus SQLAlchemy/psycopg/Alembic for persistence
 
 ## Notes for Development
 

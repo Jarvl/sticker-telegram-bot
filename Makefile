@@ -1,7 +1,7 @@
 # Telegram Sticker Bot Makefile
 # Cross-platform commands for managing the bot
 
-.PHONY: help install setup run clean docker-build docker-run docker-stop logs check-config format
+.PHONY: help install setup run clean docker-build docker-run docker-stop logs check-config format migrate
 
 # Default target
 help:
@@ -14,6 +14,7 @@ help:
 	@echo ""
 	@echo "Running the Bot:"
 	@echo "  make run        - Run bot (mode is set via MODE env variable)"
+	@echo "  make migrate    - Run database migrations"
 	@echo ""
 	@echo "Docker Commands:"
 	@echo "  make docker-build - Build Docker image"
@@ -99,8 +100,12 @@ check-config: check-env
 	@echo "Validating configuration..."
 	@poetry run python -m sticker_telegram_bot.main --config-check
 
+migrate: check-env
+	@echo "Running database migrations..."
+	@poetry run alembic upgrade head
+
 # Run bot in API mode (default)
-run: check-env install
+run: check-env install migrate
 	@echo "Starting Telegram Sticker Bot..."
 	@echo "Mode: $$MODE (set in your .env file)"
 	@echo "Press Ctrl+C to stop the bot"

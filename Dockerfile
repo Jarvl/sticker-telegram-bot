@@ -23,5 +23,5 @@ RUN poetry install --no-interaction --no-ansi --no-root --only main
 # Now copy the rest of the code
 COPY . .
 
-# Run the bot (adjust as needed)
-CMD ["python", "-m", "sticker_telegram_bot.main"]
+# Run migrations before starting the bot
+CMD ["sh", "-c", "alembic upgrade head && python -m sticker_telegram_bot.main"]
