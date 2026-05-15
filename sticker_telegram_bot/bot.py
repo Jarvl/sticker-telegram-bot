@@ -429,6 +429,10 @@ class StickerBot:
                 self.STICKER_PACK_SELECT: [
                     CallbackQueryHandler(self.handle_sticker_callback, pattern=r"^st:"),
                     MessageHandler(
+                        filters.Sticker.ALL,
+                        self.handle_sticker_import_sticker,
+                    ),
+                    MessageHandler(
                         filters.TEXT & ~filters.COMMAND,
                         self.handle_sticker_create_name,
                     ),
@@ -734,33 +738,10 @@ class StickerBot:
             return self.MANAGE_IMPORT_STICKER
 
         sticker = update.message.sticker
-        pack_name = sticker.set_name if sticker else None
-        if pack_name is None:
-            await update.message.reply_text(
-                "❌ Please reply with a sticker from the sticker pack you want to import.",
-                reply_to_message_id=update.message.message_id,
-            )
+        imported = await self._import_group_pack_from_sticker(update, context, sticker)
+        if imported is None:
             return self.MANAGE_IMPORT_STICKER
-
-        bot_username = context.bot.username or Config.TELEGRAM_BOT_USERNAME
-        if not self._is_bot_managed_pack_name(pack_name, bot_username):
-            await update.message.reply_text(
-                "❌ I can only import sticker packs that were originally created by me.",
-                reply_to_message_id=update.message.message_id,
-            )
-            return self.MANAGE_IMPORT_STICKER
-
-        try:
-            pack, already_imported = await self.import_group_pack(
-                update, context, pack_name
-            )
-        except Exception as exc:
-            logger.error(f"Error importing sticker pack: {exc}")
-            await update.message.reply_text(
-                f"❌ Could not import sticker pack: {exc}",
-                reply_to_message_id=update.message.message_id,
-            )
-            return self.MANAGE_IMPORT_STICKER
+        pack, already_imported = imported
 
         await self._replace_action_message(
             update,
@@ -918,8 +899,11 @@ class StickerBot:
         keyboard.append(
             [InlineKeyboardButton("Create Sticker Pack", callback_data="st:create")]
         )
+        keyboard.append(
+            [InlineKeyboardButton("Import Sticker Pack", callback_data="st:import")]
+        )
         await update.message.reply_text(
-            f"📦 Choose a sticker pack for {emoji_text}, or create a new one:",
+            f"📦 Choose a sticker pack for {emoji_text}, create one, or import one:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             reply_to_message_id=update.message.message_id,
         )
@@ -952,6 +936,21 @@ class StickerBot:
                 )
             return self.STICKER_PACK_SELECT
 
+        if query.data == "st:import":
+            flow["sticker_action"] = "import_pack"
+            if query.message is not None:
+                flow["action_message_id"] = query.message.message_id
+            await query.edit_message_text(
+                "Import an existing bot-managed sticker pack for this sticker. "
+                "Reply to the prompt below with any sticker from that pack."
+            )
+            if query.message is not None:
+                flow["pack_import_prompt_message_id"] = await self._send_reply_prompt(
+                    query.message,
+                    "Reply to this message with any sticker from the sticker pack you want to import.",
+                )
+            return self.STICKER_PACK_SELECT
+
         if query.data.startswith("st:add:"):
             pack_id = int(query.data.split(":")[-1])
             pack = await self._get_group_pack(pack_id, pending_data["chat_id"])
@@ -974,6 +973,59 @@ class StickerBot:
             return ConversationHandler.END
 
         return self.STICKER_PACK_SELECT
+
+    async def handle_sticker_import_sticker(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        if update.message is None:
+            return self.STICKER_PACK_SELECT
+        flow = self._flow_data(update, context)
+        if flow.get("sticker_action") != "import_pack":
+            return self.STICKER_PACK_SELECT
+        pending_data = flow.get("pending_sticker")
+        if not pending_data:
+            await update.message.reply_text("❌ No pending sticker request found.")
+            return ConversationHandler.END
+        if not self._is_reply_to_prompt(
+            update, flow.get("pack_import_prompt_message_id")
+        ):
+            await update.message.reply_text(
+                "Please reply to the import prompt so I can see the message.",
+                reply_to_message_id=update.message.message_id,
+            )
+            return self.STICKER_PACK_SELECT
+
+        imported = await self._import_group_pack_from_sticker(
+            update, context, update.message.sticker
+        )
+        if imported is None:
+            return self.STICKER_PACK_SELECT
+        pack, _ = imported
+
+        try:
+            await self.add_pending_sticker_to_pack(context, pending_data, pack)
+        except Exception as exc:
+            logger.error(f"Error adding sticker to imported pack: {exc}")
+            await update.message.reply_text(
+                f"❌ Imported the pack, but could not add sticker: {exc}",
+                reply_to_message_id=update.message.message_id,
+            )
+            return ConversationHandler.END
+
+        await self._replace_action_message(
+            update,
+            context,
+            f"✅ Imported sticker pack: {pack.title}",
+        )
+        await self._cleanup_reply_prompts(update, context)
+        self._clear_flow_data(update, context)
+        await update.message.reply_text(
+            self._sticker_added_message(pack),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return ConversationHandler.END
 
     async def handle_sticker_create_name(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -1310,6 +1362,38 @@ class StickerBot:
                 is_visible=True,
             )
             return pack, False
+
+    async def _import_group_pack_from_sticker(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE, sticker
+    ):
+        if update.message is None:
+            return None
+
+        pack_name = sticker.set_name if sticker else None
+        if pack_name is None:
+            await update.message.reply_text(
+                "❌ Please reply with a sticker from the sticker pack you want to import.",
+                reply_to_message_id=update.message.message_id,
+            )
+            return None
+
+        bot_username = context.bot.username or Config.TELEGRAM_BOT_USERNAME
+        if not self._is_bot_managed_pack_name(pack_name, bot_username):
+            await update.message.reply_text(
+                "❌ I can only import sticker packs that were originally created by me.",
+                reply_to_message_id=update.message.message_id,
+            )
+            return None
+
+        try:
+            return await self.import_group_pack(update, context, pack_name)
+        except Exception as exc:
+            logger.error(f"Error importing sticker pack: {exc}")
+            await update.message.reply_text(
+                f"❌ Could not import sticker pack: {exc}",
+                reply_to_message_id=update.message.message_id,
+            )
+            return None
 
     async def create_group_pack_from_pending_sticker(
         self,
