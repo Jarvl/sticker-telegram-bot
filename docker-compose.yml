@@ -5,7 +5,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    command: sh -c "alembic upgrade head && python -m sticker_telegram_bot.main"
     ports:
       - "8000:8000"
     environment:
