@@ -4,19 +4,35 @@ services:
   telegram-sticker-bot:
     build: .
     container_name: telegram-sticker-bot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: sh -c "alembic upgrade head && python -m sticker_telegram_bot.main"
     ports:
       - "8000:8000"
     environment:
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - TELEGRAM_BOT_USERNAME=${TELEGRAM_BOT_USERNAME}
-      - STICKER_PACKS=${STICKER_PACKS}
       - API_HOST=0.0.0.0
       - API_PORT=8000
-      - WEBHOOK_URL=${WEBHOOK_URL:-}
-      - ALLOWED_CHATS=${ALLOWED_CHATS:-}
-      - MODE=${MODE:-polling}
     env_file:
       - .env
     restart: unless-stopped
     volumes:
       - .:/app
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: telegram-sticker-bot-postgres
+    environment:
+      - POSTGRES_USER=sticker_bot
+      - POSTGRES_PASSWORD=sticker_bot
+      - POSTGRES_DB=sticker_bot
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sticker_bot -d sticker_bot"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-data:

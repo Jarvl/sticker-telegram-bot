@@ -1,13 +1,13 @@
 # Telegram Sticker Bot
 
-A powerful Telegram bot that allows users to easily add images to configured sticker packs by replying to images with the "sticker" command. The bot can be hosted as a standalone API service.
+A Telegram bot that lets group chats curate their own sticker packs by replying to media with the `/sticker` command. The bot can be hosted as a standalone API service.
 
 ## Features
 
-- ✅ **Group Chat Support**: Works in both private chats and group conversations
+- ✅ **Group Chat Support**: Group chats can create and curate their own packs
 - ✅ **Image to Sticker Conversion**: Reply to an image, GIF, or Telegram sticker (static or video) with "sticker" to add it to a pack
 - ✅ **Animated Sticker Support**: Convert GIFs to animated stickers (WEBM VP9 format)
-- ✅ **Multiple Sticker Packs**: Configure multiple sticker packs via environment variables
+- ✅ **Group Pack Management**: Use `/manage` to create, import, show, or hide group packs
 - ✅ **Media Processing**: Automatically processes images and animations to meet Telegram's sticker requirements
 - ✅ **Interactive Selection**: Users can choose which sticker pack to add images to
 - ✅ **Webhook Support**: Supports both polling and webhook modes
@@ -17,8 +17,8 @@ A powerful Telegram bot that allows users to easily add images to configured sti
 - Python 3.11+ (managed with pyenv)
 - [Poetry](https://python-poetry.org/) for dependency management
 - [FFmpeg](https://ffmpeg.org/) for animated sticker conversion
+- PostgreSQL for group sticker pack records
 - Telegram Bot Token (from [@BotFather](https://t.me/BotFather))
-- At least one sticker pack configured
 
 ## Installation
 
@@ -95,8 +95,7 @@ A powerful Telegram bot that allows users to easily add images to configured sti
 
 - `TELEGRAM_BOT_TOKEN`: Your bot token from [@BotFather](https://t.me/BotFather)
 - `TELEGRAM_BOT_USERNAME`: Your bot's username (without @)
-- `STICKER_PACKS`: Comma-separated list of sticker pack names
-- `STICKER_PACK_OWNER_USER_ID`: The Telegram user ID (integer) that owns the sticker packs
+- `DATABASE_URL`: Postgres connection string, e.g. `postgresql+psycopg://sticker_bot:sticker_bot@localhost:5432/sticker_bot`
 
 ### Optional Environment Variables
 
@@ -135,18 +134,19 @@ make install       # Install dependencies
 make run           # Run bot (mode is set via MODE env variable)
 make clean         # Clean up Python cache and logs
 make check-config  # Validate configuration only
+make migrate        # Run database migrations
 make format        # Format code with black
 make lint          # Run flake8 linter
 ```
 
 ### Using the Bot
 
-1. **Add the bot to a group or start a private chat**
-2. **Send an image, GIF, or Telegram sticker (static or video) to the chat**
-3. **Reply with the command `sticker`** (or send the media directly in allowed chats)
+1. **Add the bot to a group**
+2. **Run `/manage`** to create a group sticker pack, import an existing bot-managed pack by sending one of its stickers, or create one during `/sticker`
+3. **Reply to an image, GIF, or Telegram sticker (static or video) with `/sticker`**
 4. **Send an emoji for the sticker** (e.g., 🗿, 🔫, 💩)
-5. **Select which sticker pack to add it to**
-6. **The media will be processed and added to your chosen pack**
+5. **Select a visible group sticker pack, or create a new pack from this sticker**
+6. **The media will be processed and added to your chosen group pack**
 
 Animated Telegram stickers (TGS/Lottie) are not supported as input; use a static or video sticker, a photo, or a GIF.
 
@@ -154,6 +154,7 @@ Animated Telegram stickers (TGS/Lottie) are not supported as input; use a static
 
 - `/start` - Welcome message and basic instructions
 - `/help` - Detailed help and available sticker packs
+- `/manage` - List, show/hide, create, and import sticker packs for the current group. To import, reply with any sticker from a pack whose name ends with `_by_<bot username>`.
 - `/sticker` - Reply to an image, GIF, or Telegram sticker (static or video) to add it to a pack
 - `/cancel` - Cancel any pending sticker request
 

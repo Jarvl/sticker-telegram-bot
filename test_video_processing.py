@@ -9,6 +9,8 @@ Usage:
     python test_video_processing.py path/to/test.gif
 """
 
+__test__ = False
+
 import subprocess
 import sys
 import os
