@@ -93,11 +93,14 @@ def test_manage_home_keyboard_places_import_and_create_on_same_row(monkeypatch):
     sticker_bot = bot_module.StickerBot()
 
     rows = [
-        [button.callback_data for button in row]
+        [(button.text, button.callback_data) for button in row]
         for row in sticker_bot._manage_home_keyboard().inline_keyboard
     ]
 
-    assert ["mg:import", "mg:create"] in rows
+    assert [
+        ("📥 Import Sticker Set", "mg:import"),
+        ("✨ Create Sticker Set", "mg:create"),
+    ] in rows
 
 
 class DummySession:
@@ -209,11 +212,15 @@ async def test_sticker_pack_selection_includes_import_option(monkeypatch):
         button.callback_data for row in reply_markup.inline_keyboard for button in row
     ]
     rows = [
-        [button.callback_data for button in row] for row in reply_markup.inline_keyboard
+        [(button.text, button.callback_data) for button in row]
+        for row in reply_markup.inline_keyboard
     ]
     assert "st:create" in callback_data
     assert "st:import" in callback_data
-    assert ["st:import", "st:create"] in rows
+    assert [
+        ("📥 Import Sticker Set", "st:import"),
+        ("✨ Create Sticker Set", "st:create"),
+    ] in rows
 
 
 @pytest.mark.asyncio

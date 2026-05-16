@@ -516,11 +516,11 @@ class StickerBot:
                 ],
                 [
                     InlineKeyboardButton(
-                        "Import Sticker Set",
+                        "📥 Import Sticker Set",
                         callback_data="mg:import",
                     ),
                     InlineKeyboardButton(
-                        "Create Sticker Set",
+                        "✨ Create Sticker Set",
                         callback_data="mg:create",
                     ),
                 ],
@@ -897,8 +897,12 @@ class StickerBot:
         ]
         keyboard.append(
             [
-                InlineKeyboardButton("Import Sticker Set", callback_data="st:import"),
-                InlineKeyboardButton("Create Sticker Set", callback_data="st:create"),
+                InlineKeyboardButton(
+                    "📥 Import Sticker Set", callback_data="st:import"
+                ),
+                InlineKeyboardButton(
+                    "✨ Create Sticker Set", callback_data="st:create"
+                ),
             ]
         )
         await update.message.reply_text(
