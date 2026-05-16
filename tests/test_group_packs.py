@@ -49,6 +49,49 @@ def test_empty_pack_placeholder_is_white_square(monkeypatch):
     assert image.getpixel((0, 0)) == (255, 255, 255, 255)
 
 
+@pytest.mark.asyncio
+async def test_process_image_for_sticker_returns_optimized_png(monkeypatch):
+    bot_module = load_bot_module(monkeypatch)
+    sticker_bot = bot_module.StickerBot()
+    source = Image.new("RGB", (2048, 1024), "navy")
+    source.paste("gold", (100, 100, 900, 500))
+    input_file = io.BytesIO()
+    source.save(input_file, format="PNG")
+
+    sticker_data = await sticker_bot.process_image_for_sticker(input_file.getvalue())
+    sticker = Image.open(io.BytesIO(sticker_data))
+
+    assert len(sticker_data) <= sticker_bot.MAX_STATIC_STICKER_BYTES
+    assert sticker.format == "PNG"
+    assert sticker.size == (512, 512)
+
+
+@pytest.mark.asyncio
+async def test_process_image_for_sticker_uses_lossless_webp_fallback(monkeypatch):
+    bot_module = load_bot_module(monkeypatch)
+    sticker_bot = bot_module.StickerBot()
+    sticker_bot.MAX_STATIC_STICKER_BYTES = 1024
+    source = Image.new("RGBA", (512, 512))
+    pixels = source.load()
+    for y in range(source.height):
+        for x in range(source.width):
+            pixels[x, y] = (
+                (x * 3 + y * 7) % 256,
+                (x * 5 + y * 11) % 256,
+                (x * 13 + y * 17) % 256,
+                255,
+            )
+    input_file = io.BytesIO()
+    source.save(input_file, format="PNG")
+
+    sticker_data = await sticker_bot.process_image_for_sticker(input_file.getvalue())
+    sticker = Image.open(io.BytesIO(sticker_data))
+
+    assert len(sticker_data) <= sticker_bot.MAX_STATIC_STICKER_BYTES
+    assert sticker.format == "WEBP"
+    assert sticker.size == (512, 512)
+
+
 def test_bot_managed_pack_name_requires_bot_suffix(monkeypatch):
     bot_module = load_bot_module(monkeypatch)
     sticker_bot = bot_module.StickerBot()
@@ -69,6 +112,21 @@ def test_normalize_single_emoji_allows_variation_selector_noise(monkeypatch):
     assert sticker_bot._normalize_single_emoji("👍🏽") == "👍🏽"
     assert sticker_bot._normalize_single_emoji("🌭👁️") is None
     assert sticker_bot._normalize_single_emoji("🌭x") is None
+
+
+def test_manage_home_keyboard_places_import_and_create_on_same_row(monkeypatch):
+    bot_module = load_bot_module(monkeypatch)
+    sticker_bot = bot_module.StickerBot()
+
+    rows = [
+        [(button.text, button.callback_data) for button in row]
+        for row in sticker_bot._manage_home_keyboard().inline_keyboard
+    ]
+
+    assert [
+        ("📥 Import Sticker Set", "mg:import"),
+        ("✨ Create Sticker Set", "mg:create"),
+    ] in rows
 
 
 class DummySession:
@@ -179,8 +237,16 @@ async def test_sticker_pack_selection_includes_import_option(monkeypatch):
     callback_data = [
         button.callback_data for row in reply_markup.inline_keyboard for button in row
     ]
+    rows = [
+        [(button.text, button.callback_data) for button in row]
+        for row in reply_markup.inline_keyboard
+    ]
     assert "st:create" in callback_data
     assert "st:import" in callback_data
+    assert [
+        ("📥 Import Sticker Set", "st:import"),
+        ("✨ Create Sticker Set", "st:create"),
+    ] in rows
 
 
 @pytest.mark.asyncio
