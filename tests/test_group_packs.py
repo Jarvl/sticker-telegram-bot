@@ -66,6 +66,32 @@ async def test_process_image_for_sticker_returns_optimized_png(monkeypatch):
     assert sticker.size == (512, 512)
 
 
+@pytest.mark.asyncio
+async def test_process_image_for_sticker_uses_lossless_webp_fallback(monkeypatch):
+    bot_module = load_bot_module(monkeypatch)
+    sticker_bot = bot_module.StickerBot()
+    sticker_bot.MAX_STATIC_STICKER_BYTES = 1024
+    source = Image.new("RGBA", (512, 512))
+    pixels = source.load()
+    for y in range(source.height):
+        for x in range(source.width):
+            pixels[x, y] = (
+                (x * 3 + y * 7) % 256,
+                (x * 5 + y * 11) % 256,
+                (x * 13 + y * 17) % 256,
+                255,
+            )
+    input_file = io.BytesIO()
+    source.save(input_file, format="PNG")
+
+    sticker_data = await sticker_bot.process_image_for_sticker(input_file.getvalue())
+    sticker = Image.open(io.BytesIO(sticker_data))
+
+    assert len(sticker_data) <= sticker_bot.MAX_STATIC_STICKER_BYTES
+    assert sticker.format == "WEBP"
+    assert sticker.size == (512, 512)
+
+
 def test_bot_managed_pack_name_requires_bot_suffix(monkeypatch):
     bot_module = load_bot_module(monkeypatch)
     sticker_bot = bot_module.StickerBot()

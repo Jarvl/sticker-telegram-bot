@@ -1107,16 +1107,22 @@ class StickerBot:
             y = (max_size - new_size[1]) // 2
             canvas.paste(image, (x, y))
 
-            # Convert back to bytes, using PNG optimization to stay under Telegram's
-            # static sticker upload limit when possible.
-            output = io.BytesIO()
-            canvas.save(output, format="PNG", optimize=True)
-            sticker_data = output.getvalue()
+            # Telegram accepts static stickers as PNG or WEBP. Keep lossless PNG
+            # when it fits, then fall back to lossless WEBP for photo-like images.
+            png_output = io.BytesIO()
+            canvas.save(png_output, format="PNG", optimize=True)
+            sticker_data = png_output.getvalue()
+            if len(sticker_data) <= self.MAX_STATIC_STICKER_BYTES:
+                return sticker_data
+
+            webp_output = io.BytesIO()
+            canvas.save(webp_output, format="WEBP", lossless=True, method=6)
+            sticker_data = webp_output.getvalue()
             if len(sticker_data) > self.MAX_STATIC_STICKER_BYTES:
                 file_size_kb = len(sticker_data) / 1024
                 raise ValueError(
-                    f"Processed image is too large ({file_size_kb:.2f} KB > 512 KB). "
-                    "Try using a simpler image."
+                    f"Processed image is too large ({file_size_kb:.2f} KB > 512 KB) "
+                    "after PNG and lossless WEBP compression. Try using a simpler image."
                 )
             return sticker_data
 
